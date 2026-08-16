@@ -25,8 +25,8 @@ _ICO = _ASSETS / "icon.ico"
 _LEAF_IDLE = _ASSETS / "leaf.png"
 _LEAF_ACTIVE = _ASSETS / "leaf-filled.png"
 
-# Windows picks a tray render by DPI. Each size is rendered separately so the
-# outline can be thickened only where it needs it.
+# Windows picks a tray render by DPI. Each size is rendered from the source art
+# rather than scaled off one bitmap, so the thin outline resamples cleanly.
 _TRAY_SIZES = (16, 20, 24, 32, 48)
 
 # A running session is always this green, whatever the overlay accent is set to:
@@ -85,15 +85,13 @@ def _fit(mask: Image.Image, n: int, margin: float = 0.02) -> Image.Image:
 
 @lru_cache(maxsize=32)
 def _tray_pixmap(size: int, active: bool, colour: tuple[int, int, int]) -> QPixmap:
+    # The outline is left exactly as drawn. Dilating it at 16 and 20px was tried
+    # to stop the sub-pixel stroke greying out, and it made the leaf visibly
+    # heavier than the system glyphs beside it -- worse than the problem it
+    # solved. Downsampling from the supersampled mask keeps the thin stroke
+    # readable on its own.
     n = size * _SUPERSAMPLE
     mask = _leaf_alpha(_LEAF_ACTIVE if active else _LEAF_IDLE).resize((n, n), Image.LANCZOS)
-
-    if not active and size <= 20:
-        # The outline stroke is under a pixel wide at these sizes and greys out
-        # into a smudge; dilate it slightly before the downsample. The filled
-        # glyph has no thin strokes and needs none.
-        mask = mask.filter(ImageFilter.MaxFilter(_SUPERSAMPLE | 1))
-
     mask = _fit(mask, n)
     image = Image.new("RGBA", (n, n), (0, 0, 0, 0))
     image.paste(Image.new("RGBA", (n, n), (*colour, 255)), (0, 0), mask)
