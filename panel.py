@@ -203,6 +203,12 @@ class Panel(QWidget):
         edit.setAlignment(alignment)
         edit.setValidator(QIntValidator(1, 999, self))
         edit.returnPressed.connect(self._start)
+        # Every button here is NoFocus, so with the default StrongFocus these
+        # fields were the only focus candidates and Qt handed the caret to the
+        # first one the moment the panel opened. ClickFocus keeps them silent
+        # until they are actually clicked -- the same thing the macOS popover
+        # does by clearing its first responder on appear.
+        edit.setFocusPolicy(Qt.ClickFocus)
         return edit
 
     def _build_active(self):
@@ -282,7 +288,10 @@ class Panel(QWidget):
         self._config.break_duration = break_duration
         config.save(self._config)
         self._session.start(self._config)
-        self.hide()  # macOS closes the popover once a session starts
+        # macOS closes the popover here. Not done on Windows: pressing start and
+        # having the window vanish reads as "did that work?" -- the panel stays
+        # up and swaps to the countdown, and still dismisses on the next click
+        # elsewhere like any other transient popup.
 
     def _set_error(self, message):
         self._error.setText(message or "")
