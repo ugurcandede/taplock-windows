@@ -10,7 +10,7 @@ session, which keeps the state machine testable without Qt.
 
 import sys
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QSharedMemory, QTimer
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
@@ -22,8 +22,11 @@ from parsers import format_mmss
 from session import RelaxSession
 from theme import STYLESHEET
 
-# Named pipe used to detect an already-running instance.
-_IPC_KEY = "TapLock-single-instance"
+# Shared-memory segment whose existence means "an instance is already running".
+# Creating it is atomic, so two launches milliseconds apart cannot both win.
+_GUARD_KEY = "TapLock-single-instance"
+# Named pipe, used only to tell that running instance to surface its panel.
+_IPC_KEY = "TapLock-ipc"
 
 TICK_MS = 1000
 
@@ -40,6 +43,9 @@ class TrayApp:
         self._tray_shows_active = None  # forces the first icon render
         menu = QMenu()
         menu.addAction("Show / Hide", self.toggle_panel)
+        # Only meaningful mid-session; hidden the rest of the time.
+        self._stop_action = menu.addAction("Stop session", self._session.stop)
+        self._stop_action.setVisible(False)
         menu.addSeparator()
         menu.addAction("Quit", self.quit)
         self._tray.setContextMenu(menu)
@@ -80,10 +86,11 @@ class TrayApp:
 
     def _refresh_tray(self):
         running = self._session.running
-        # The tooltip changes every second; the icon only when the glyph does.
+        # The tooltip changes every second; the icon and menu only on a switch.
         if running != self._tray_shows_active:
             self._tray_shows_active = running
             self._tray.setIcon(icon.tray_icon(running))
+            self._stop_action.setVisible(running)
         if running:
             phase = "break" if self._session.on_break else "next break"
             self._tray.setToolTip(f"TapLock — {phase} in {format_mmss(self._session.remaining)}")
@@ -111,21 +118,24 @@ class TrayApp:
         self._app.quit()
 
 
-def _ping_running_instance():
-    """True if another instance already holds the socket (connection succeeds)."""
+def _claim_single_instance():
+    """The guard segment, or None if another instance already holds it.
+
+    Not `QLocalServer.listen()`: on Windows a pipe name accepts several server
+    instances, so listen() succeeds for every launch and detects nothing.
+    Creating a shared-memory segment is atomic and the segment dies with its
+    owner, so there is no stale lock to clean up either.
+    """
+    guard = QSharedMemory(_GUARD_KEY)
+    return guard if guard.create(1) else None
+
+
+def _wake_running_instance():
+    """Best effort: connect to the running instance so it shows its panel."""
     socket = QLocalSocket()
     socket.connectToServer(_IPC_KEY)
-    connected = socket.waitForConnected(200)
-    if connected:
+    if socket.waitForConnected(200):
         socket.disconnectFromServer()
-    return connected
-
-
-def _claim_instance_socket():
-    QLocalServer.removeServer(_IPC_KEY)  # clears a socket left behind by a crash
-    server = QLocalServer()
-    server.listen(_IPC_KEY)
-    return server
 
 
 def main():
@@ -137,9 +147,14 @@ def main():
     # No main window: closing the panel must not end the process.
     app.setQuitOnLastWindowClosed(False)
 
-    if _ping_running_instance():
+    # Held for the process lifetime: releasing it would let a second instance in.
+    guard = _claim_single_instance()
+    if guard is None:
+        _wake_running_instance()
         sys.exit(0)
-    server = _claim_instance_socket()
+
+    server = QLocalServer()
+    server.listen(_IPC_KEY)
 
     if not QSystemTrayIcon.isSystemTrayAvailable():
         sys.exit("No system tray available.")
