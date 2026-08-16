@@ -388,8 +388,15 @@ class Panel(QWidget):
 
         layout.addWidget(_divider())
 
+        # U+E8A9 is the four-pane tile glyph from the Windows icon fonts. The
+        # actual Windows logo is not in them -- Microsoft keeps brand marks out
+        # -- and this reads as it at caption size while staying monochrome, so
+        # it takes the label's colour and stays crisp where a colour emoji goes
+        # muddy. Fluent ships with Windows 11, MDL2 is the Windows 10 fallback;
+        # the codepoint is the same in both.
+        windows = "<span style=\"font-family:'Segoe Fluent Icons','Segoe MDL2 Assets';\"></span>"
         about = QLabel(
-            "Built with ❤ for 🪟 users<br>"
+            f"Built with ❤ for {windows} users<br>"
             f'<a href="https://github.com/ugurcandede">ugurcandede</a> · <a href="https://github.com/ugurcandede/taplock-windows">v{VERSION}</a>'
         )
         about.setObjectName("about")

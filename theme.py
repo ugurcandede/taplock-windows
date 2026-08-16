@@ -179,7 +179,14 @@ QComboBox QAbstractItemView {
     outline: none;
 }
 
-QLabel#about { color: $faint; font-size: 10px; }
+/* Plain Segoe UI, not the Variable Display face the rest of the sheet inherits:
+   Display is the optical size meant for large text and goes thin and hard to
+   read at caption sizes. */
+QLabel#about {
+    color: $faint;
+    font-family: "Segoe UI";
+    font-size: 11px;
+}
 QLabel#about a { color: $accent; text-decoration: none; }
 
 /* The tray context menu picks this up too. */

@@ -13,8 +13,10 @@ Agreement, which requires a visible link to <https://icons8.com> wherever the
 icons are used; a paid Icons8 plan removes that requirement. This repository
 redistributes the PNGs and the built executable embeds them.
 
-The panel's about section now carries a "leaf icon by Icons8" link, which
-satisfies the free tier. Remove it only if a paid Icons8 licence is in place.
+**Currently unmet.** The about section carried a "leaf icon by Icons8" link for
+one commit and no longer does, so the free tier's condition is not being
+satisfied. Either put the link back before shipping, or confirm a paid Icons8
+licence covers redistribution and delete this note.
 
 ## icon.png, icon.ico
 
