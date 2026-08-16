@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 import config
 import icon
+from overlay import OverlayController
 from panel import Panel
 from parsers import format_mmss, parse_color, rgb255
 from session import RelaxSession
@@ -46,12 +47,26 @@ class TrayApp:
         self._refresh_tray()
         self._tray.show()
 
+        self._overlays = OverlayController(app)
+        self._overlays.skipped.connect(self._session.skip_break)
+        self._session.break_started.connect(self._open_overlay)
+        self._session.break_ended.connect(self._overlays.close)
+
         self._timer = QTimer(app)
         self._timer.setInterval(TICK_MS)
-        self._timer.timeout.connect(self._session.tick)
+        self._timer.timeout.connect(self._tick)
         self._timer.start()
 
         self._session.state_changed.connect(self._refresh_tray)
+
+    def _tick(self):
+        self._session.tick()
+        if self._overlays.visible:
+            self._overlays.set_remaining(self._session.remaining)
+
+    def _open_overlay(self):
+        self._overlays.open(self._session.config)
+        self._overlays.set_remaining(self._session.remaining)
 
     # ---- tray ------------------------------------------------------------
 

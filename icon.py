@@ -13,7 +13,7 @@ import io
 from functools import lru_cache
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 from PySide6.QtGui import QIcon, QPixmap
 
 _ASSETS = Path(__file__).resolve().parent / "assets"
@@ -80,3 +80,36 @@ def tray_icon(active: bool, accent: tuple[int, int, int]) -> QIcon:
     for size in _TRAY_SIZES:
         icon.addPixmap(_tray_pixmap(size, active, accent))
     return icon
+
+
+# ---- breathing overlay ---------------------------------------------------
+
+# SwiftUI draws a 300pt circle at 30% alpha under a 60pt blur. A Gaussian that
+# wide reaches roughly 3 sigma past the edge, so the visible disc spans about
+# 300 + 2*3*60 design units. Keeping those three numbers lets the overlay scale
+# the sprite in the same units SwiftUI animates in.
+GLOW_CIRCLE = 300
+GLOW_BLUR = 60
+GLOW_SPAN = GLOW_CIRCLE + 6 * GLOW_BLUR
+
+_GLOW_RESOLUTION = 512
+
+
+@lru_cache(maxsize=4)
+def glow_sprite(accent: tuple[int, int, int]) -> QPixmap:
+    """The pulsing disc, rendered once per accent colour.
+
+    Each frame only scales and fades this pixmap: running a Gaussian blur inside
+    a paint event would not hold a frame rate.
+    """
+    n = _GLOW_RESOLUTION
+    scale = n / GLOW_SPAN
+    radius = GLOW_CIRCLE * scale / 2
+    centre = n / 2
+
+    image = Image.new("RGBA", (n, n), (0, 0, 0, 0))
+    ImageDraw.Draw(image).ellipse(
+        [centre - radius, centre - radius, centre + radius, centre + radius],
+        fill=(*accent, 77),  # 0.30 alpha, as in the SwiftUI original
+    )
+    return _to_pixmap(image.filter(ImageFilter.GaussianBlur(GLOW_BLUR * scale)))
