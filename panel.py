@@ -10,7 +10,7 @@ settings) and the running view (countdown / skip / stop), swapped from the
 session's `state_changed`.
 """
 
-from PySide6.QtCore import QEvent, QRect, Qt, Signal
+from PySide6.QtCore import QEasingCurve, QEvent, QRect, Qt, QVariantAnimation, Signal
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QIntValidator, QPainter
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -38,6 +38,10 @@ SHADOW_MARGIN = 18
 # Gap between the tray icon and the panel.
 ANCHOR_GAP = 8
 SIDE_PADDING = 20
+# Matches the 0.15s easeInOut the macOS popover animates its settings with.
+SETTINGS_ANIM_MS = 150
+# QWIDGETSIZE_MAX; PySide does not export it.
+_UNBOUNDED = 16777215
 
 
 def _mono(pixel_size, weight=QFont.Weight.ExtraLight):
@@ -189,6 +193,13 @@ class Panel(QWidget):
         self._anchor = QRect()
         self._layout_key = None
         self._loading = False
+        self._settings_open = False
+
+        self._settings_anim = QVariantAnimation(self)
+        self._settings_anim.setDuration(SETTINGS_ANIM_MS)
+        self._settings_anim.setEasingCurve(QEasingCurve.InOutQuad)
+        self._settings_anim.valueChanged.connect(self._settings_step)
+        self._settings_anim.finished.connect(self._settings_settled)
 
         self._build()
         self._load_config()
@@ -378,9 +389,8 @@ class Panel(QWidget):
         layout.addWidget(_divider())
 
         about = QLabel(
-            "Built with ❤ for 🖥 users<br>"
-            f'<a href="https://github.com/ugurcandede">ugurcandede</a> · v{VERSION}<br>'
-            '<a href="https://icons8.com">leaf icon by Icons8</a>'
+            "Built with ❤ for 🪟 users<br>"
+            f'<a href="https://github.com/ugurcandede">ugurcandede</a> · <a href="https://github.com/ugurcandede/taplock-windows">v{VERSION}</a>'
         )
         about.setObjectName("about")
         about.setAlignment(Qt.AlignCenter)
@@ -482,10 +492,36 @@ class Panel(QWidget):
         config.save(self._config)
 
     def _toggle_settings(self):
-        showing = not self._settings.isVisible()
-        self._settings.setVisible(showing)
-        self._settings_button.set_open(showing)
-        self._reflow()
+        self._settings_open = not self._settings_open
+        self._settings_button.set_open(self._settings_open)
+
+        if self._settings_open:
+            # It has to be visible to be animated, so it opens at zero height.
+            self._settings.setMaximumHeight(0)
+            self._settings.show()
+            start, end = 0, self._settings.sizeHint().height()
+        else:
+            start, end = self._settings.height(), 0
+
+        self._settings_anim.stop()
+        self._settings_anim.setStartValue(start)
+        self._settings_anim.setEndValue(end)
+        self._settings_anim.start()
+
+    def _settings_step(self, height):
+        self._settings.setMaximumHeight(int(height))
+        self._fit()
+        if self.isVisible():
+            self._place()
+
+    def _settings_settled(self):
+        if self._settings_open:
+            self._settings.setMaximumHeight(_UNBOUNDED)  # let it grow again
+        else:
+            self._settings.hide()
+        self._fit()
+        if self.isVisible():
+            self._place()
 
     def _apply_preset(self, interval_minutes, break_minutes):
         self._interval_edit.setText(str(interval_minutes))
@@ -555,12 +591,18 @@ class Panel(QWidget):
         for layout in (self._card.layout(), self.layout()):
             layout.invalidate()
             layout.activate()
+        # The layout's default size constraint pushes its minimum onto the
+        # window, and Qt will not lower a minimum once it has been set. After the
+        # panel had been shown with settings expanded, that minimum stayed at the
+        # expanded height and adjustSize() could no longer shrink past it --
+        # collapsing left the window its old size. Clearing it first is the fix.
+        self.setMinimumSize(0, 0)
         self.adjustSize()
 
     def _reflow(self):
         self._fit()
         if self.isVisible():
-            self.show_at(self._anchor)
+            self._place()
 
     # ---- show / hide -----------------------------------------------------
 
@@ -573,6 +615,15 @@ class Panel(QWidget):
     def show_at(self, anchor):
         self._anchor = anchor
         self._fit()
+        self._place()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _place(self):
+        """Position against the anchor. Separate from `show_at` so the resize
+        animation can reposition every frame without re-raising the window."""
+        anchor = self._anchor
         screen = QGuiApplication.screenAt(anchor.center()) if not anchor.isEmpty() else None
         screen = screen or QGuiApplication.primaryScreen()
         area = screen.availableGeometry()
