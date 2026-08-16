@@ -68,6 +68,7 @@ _TEMPLATE = Template("""
    it thins out and stops reading. */
 * {
     font-family: "Segoe UI", system-ui, sans-serif;
+    font-weight: 600;
 }
 
 QWidget#card {

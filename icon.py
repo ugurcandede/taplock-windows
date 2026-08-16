@@ -210,20 +210,33 @@ def windows_logo(size: int, colour: tuple[int, int, int]) -> QPixmap:
 
 
 @lru_cache(maxsize=8)
-def card_shadow(width: int, height: int, margin: int, radius: int, blur: float, alpha: int) -> QPixmap:
+def card_shadow(
+    width: int, height: int, margin: int, radius: int, blur: float, alpha: int, offset: int
+) -> QPixmap:
     """The soft shadow under a glass card, baked once.
 
     Not a QGraphicsDropShadowEffect: an effect re-renders its whole source
     widget and re-blurs it every time any child repaints, so a card with an
     animation inside pays a full blur per frame.
     """
-    canvas = Image.new("RGBA", (width + 2 * margin, height + 2 * margin), (0, 0, 0, 0))
+    size = (width + 2 * margin, height + 2 * margin)
+    canvas = Image.new("RGBA", size, (0, 0, 0, 0))
     ImageDraw.Draw(canvas).rounded_rectangle(
-        [margin, margin + 4, margin + width, margin + height + 4],
+        [margin, margin + offset, margin + width, margin + height + offset],
         radius=radius,
         fill=(0, 0, 0, alpha),
     )
-    return _to_pixmap(canvas.filter(ImageFilter.GaussianBlur(blur)))
+    canvas = canvas.filter(ImageFilter.GaussianBlur(blur))
+
+    # Punch the card's own silhouette back out. The card covers exactly this
+    # area, and these cards are translucent -- black left underneath seeps up
+    # through the glass and dirties it.
+    keep = Image.new("L", size, 255)
+    ImageDraw.Draw(keep).rounded_rectangle(
+        [margin, margin, margin + width, margin + height], radius=radius, fill=0
+    )
+    canvas.putalpha(Image.composite(canvas.getchannel("A"), Image.new("L", size, 0), keep))
+    return _to_pixmap(canvas)
 
 
 def blurred_backdrop(snapshot: QPixmap, blur: float, tint: tuple[int, int, int, int]) -> QPixmap:

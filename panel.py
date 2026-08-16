@@ -45,9 +45,13 @@ SETTINGS_ANIM_MS = 150
 _UNBOUNDED = 16777215
 # Windows logo in the about line, sized to sit with 11px text.
 LOGO_PX = 12
+# Every settings row is this tall, whatever it contains. With the 4px spacing
+# below it that gives a 30px pitch, close to the macOS section.
+SETTINGS_ROW_HEIGHT = 26
+SETTINGS_ROW_SPACING = 4
 
 
-def _mono(pixel_size, weight=QFont.Weight.ExtraLight):
+def _mono(pixel_size, weight=QFont.Weight.DemiBold):
     """Cascadia Mono ships with Windows 11 / Terminal; Consolas is the fallback."""
     font = QFont()
     font.setFamilies(["Cascadia Mono", "Consolas"])
@@ -335,45 +339,27 @@ class Panel(QWidget):
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(SIDE_PADDING, 4, SIDE_PADDING, 10)
-        layout.setSpacing(10)
+        layout.setSpacing(SETTINGS_ROW_SPACING)
 
-        # theme + preview
-        theme_row = QHBoxLayout()
-        theme_row.addWidget(_caption("theme"))
-        theme_row.addStretch()
-        preview = QPushButton("preview")
-        preview.setObjectName("preset")
-        preview.setFocusPolicy(Qt.NoFocus)
-        preview.setCursor(Qt.PointingHandCursor)
-        preview.setToolTip("Show this theme for 5 seconds")
-        preview.clicked.connect(self.preview_theme)
-        theme_row.addWidget(preview)
         self._theme_box = QComboBox()
         self._theme_box.addItems(config.THEMES)
         self._theme_box.setFocusPolicy(Qt.NoFocus)
         self._theme_box.setCursor(Qt.PointingHandCursor)
         self._theme_box.currentTextChanged.connect(self._save_settings)
-        theme_row.addWidget(self._theme_box)
-        layout.addLayout(theme_row)
+        layout.addWidget(
+            self._row(
+                "theme",
+                self._preview_button("Show this theme for 5 seconds", self.preview_theme),
+                self._theme_box,
+            )
+        )
 
-        # colour swatches
-        colour_row = QHBoxLayout()
-        colour_row.addWidget(_caption("color"))
-        colour_row.addStretch()
-        colour_row.setSpacing(6)
         self._swatches = QButtonGroup(self)
         for name in PRESET_COLORS:
-            swatch = _Swatch(name)
-            self._swatches.addButton(swatch)
-            colour_row.addWidget(swatch)
+            self._swatches.addButton(_Swatch(name))
         self._swatches.buttonClicked.connect(self._save_settings)
-        layout.addLayout(colour_row)
+        layout.addWidget(self._row("color", *self._swatches.buttons(), spacing=6))
 
-        # transparency pills
-        alpha_row = QHBoxLayout()
-        alpha_row.addWidget(_caption("transparency"))
-        alpha_row.addStretch()
-        alpha_row.setSpacing(2)
         self._alphas = QButtonGroup(self)
         for label, value in config.TRANSPARENCY:
             pill = QPushButton(str(label))
@@ -383,14 +369,23 @@ class Panel(QWidget):
             pill.setCursor(Qt.PointingHandCursor)
             pill.opacity = value
             self._alphas.addButton(pill)
-            alpha_row.addWidget(pill)
         self._alphas.buttonClicked.connect(self._save_settings)
-        layout.addLayout(alpha_row)
+        layout.addWidget(self._row("transparency", *self._alphas.buttons(), spacing=2))
 
-        self._launch_switch = self._switch_row(layout, "launch at login")
-        self._silent_switch = self._switch_row(layout, "silent")
-        self._posture_switch = self._switch_row(
-            layout, "posture reminder", preview=self.preview_posture
+        self._launch_switch = _Switch()
+        self._silent_switch = _Switch()
+        self._posture_switch = _Switch()
+        for switch in (self._launch_switch, self._silent_switch, self._posture_switch):
+            switch.toggled.connect(self._save_settings)
+
+        layout.addWidget(self._row("launch at login", self._launch_switch))
+        layout.addWidget(self._row("silent", self._silent_switch))
+        layout.addWidget(
+            self._row(
+                "posture reminder",
+                self._preview_button("Show the reminder for 5 seconds", self.preview_posture),
+                self._posture_switch,
+            )
         )
 
         layout.addWidget(_divider())
@@ -432,23 +427,32 @@ class Panel(QWidget):
         label.setObjectName("about")
         return label
 
-    def _switch_row(self, layout, label, preview=None):
-        row = QHBoxLayout()
-        row.addWidget(_caption(label))
-        row.addStretch()
-        if preview is not None:
-            button = QPushButton("preview")
-            button.setObjectName("preset")
-            button.setFocusPolicy(Qt.NoFocus)
-            button.setCursor(Qt.PointingHandCursor)
-            button.setToolTip("Show the reminder for 5 seconds")
-            button.clicked.connect(preview)
-            row.addWidget(button)
-        switch = _Switch()
-        switch.toggled.connect(self._save_settings)
-        row.addWidget(switch)
-        layout.addLayout(row)
-        return switch
+    def _row(self, caption, *widgets, spacing=8):
+        """One settings row, at the same height as every other one.
+
+        Built by hand before, each row ended up as tall as whatever it held --
+        28px with a preview button, 18px with only a switch -- so the block read
+        as unevenly spaced.
+        """
+        row = QWidget()
+        row.setFixedHeight(SETTINGS_ROW_HEIGHT)
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(spacing)
+        layout.addWidget(_caption(caption))
+        layout.addStretch()
+        for widget in widgets:
+            layout.addWidget(widget)
+        return row
+
+    def _preview_button(self, tooltip, slot):
+        button = QPushButton("preview")
+        button.setObjectName("preset")
+        button.setFocusPolicy(Qt.NoFocus)
+        button.setCursor(Qt.PointingHandCursor)
+        button.setToolTip(tooltip)
+        button.clicked.connect(slot)
+        return button
 
     def _build_active(self):
         page = QWidget()

@@ -19,6 +19,7 @@ from PySide6.QtCore import (
     QPoint,
     QRect,
     QRectF,
+    QSize,
     QTime,
     QTimer,
     Qt,
@@ -68,7 +69,9 @@ def _font(pixel_size, weight, mono=False):
     font = QFont()
     font.setFamilies(["Cascadia Mono", "Consolas"] if mono else ["Segoe UI"])
     font.setPixelSize(pixel_size)
-    font.setWeight(weight)
+    # Floor every weight at DemiBold: the whole app is being tried bold, and the
+    # overlays would otherwise stay light while the panel went heavy.
+    font.setWeight(max(weight, QFont.Weight.DemiBold))
     return font
 
 
@@ -243,7 +246,7 @@ class BreathingOverlay(QWidget):
 
 # ---- glass themes --------------------------------------------------------
 
-SHADOW_MARGIN = 24
+SHADOW_MARGIN = 40
 MINIMAL_WIDTH = 300
 MINIMAL_RADIUS = 16
 MINIMAL_BLUR = 24
@@ -312,7 +315,7 @@ class _GlassOverlay(QWidget):
 
     skipped = Signal()
 
-    def __init__(self, radius, tint, blur, shadow_blur, shadow_alpha, takes_focus):
+    def __init__(self, radius, tint, blur, shadow_blur, shadow_alpha, takes_focus, shadow_offset=0):
         super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_DeleteOnClose)
@@ -327,6 +330,7 @@ class _GlassOverlay(QWidget):
         self._radius = radius
         self._shadow_blur = shadow_blur
         self._shadow_alpha = shadow_alpha
+        self._shadow_offset = shadow_offset
         self._shadow = None
 
         self.card = _Card(radius)
@@ -341,15 +345,22 @@ class _GlassOverlay(QWidget):
         self.layout().activate()
         self.adjustSize()
         self.move(self._position(screen))
-        card_rect = QRect(self.pos() + QPoint(SHADOW_MARGIN, SHADOW_MARGIN), self.card.size())
+        # Deliberately not self.card.size(): the child still reports its
+        # pre-layout height here, and adjustSize() has already resized the
+        # window correctly. Trusting the child produced a shadow sized for a
+        # 400px card behind a 246px one -- its cut-out swallowed the whole
+        # visible fringe -- and grabbed the backdrop from the wrong region too.
+        card_size = QSize(self.width() - 2 * SHADOW_MARGIN, self.height() - 2 * SHADOW_MARGIN)
+        card_rect = QRect(self.pos() + QPoint(SHADOW_MARGIN, SHADOW_MARGIN), card_size)
         self.card.set_backdrop(icon.blurred_backdrop(_snapshot(screen, card_rect), self._blur, self._tint))
         self._shadow = icon.card_shadow(
-            self.card.width(),
-            self.card.height(),
+            card_size.width(),
+            card_size.height(),
             SHADOW_MARGIN,
             self._radius,
             self._shadow_blur,
             self._shadow_alpha,
+            self._shadow_offset,
         )
 
     def paintEvent(self, event):
@@ -371,8 +382,10 @@ class MinimalOverlay(_GlassOverlay):
             radius=MINIMAL_RADIUS,
             tint=_minimal_tint(accent),
             blur=MINIMAL_BLUR,
-            shadow_blur=8,
-            shadow_alpha=90,
+            # macOS: .shadow(black 0.3, radius 20). SwiftUI's radius is about
+            # twice the Gaussian sigma Pillow takes.
+            shadow_blur=10,
+            shadow_alpha=77,
             takes_focus=takes_focus,
         )
         # Same rule as the Swift original: dark text on a light accent.
@@ -434,8 +447,8 @@ class MiniOverlay(_GlassOverlay):
             radius=MINI_RADIUS,
             tint=_MINI_TINT,
             blur=MINI_BLUR,
-            shadow_blur=6,
-            shadow_alpha=70,
+            shadow_blur=5,  # macOS: .shadow(black 0.2, radius 10)
+            shadow_alpha=51,
             takes_focus=False,
         )
         self.card.setFixedSize(*MINI_SIZE)
@@ -591,9 +604,9 @@ class PostureReminder(_GlassOverlay):
             radius=POSTURE_RADIUS,
             tint=(28, 28, 30, 225) if dark else (250, 250, 252, 235),
             blur=POSTURE_BLUR,
-            # shadow_blur=8,
-            shadow_blur=0,
-            shadow_alpha=90,
+            shadow_blur=10,  # macOS: .shadow(black 0.15, radius 20, y 8)
+            shadow_alpha=38,
+            shadow_offset=8,
             takes_focus=False,
         )
         self.card.setFixedWidth(POSTURE_WIDTH)
