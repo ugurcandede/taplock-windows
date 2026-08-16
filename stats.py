@@ -32,6 +32,19 @@ PERIODS = (
 # Periods shown in the compact panel dropdown; the rest live in the stats window.
 PANEL_PERIODS = ("today", "this_week", "last_week")
 
+PERIOD_LABELS = {
+    "today": "today",
+    "yesterday": "yesterday",
+    "this_week": "this week",
+    "last_week": "last week",
+    "this_month": "this month",
+    "last_month": "last month",
+    "this_year": "this year",
+    "last_year": "last year",
+    "all_time": "all time",
+    "custom": "custom",
+}
+
 
 def _iso(moment):
     """Swift's `.iso8601` strategy emits whole seconds with a `Z` suffix and its

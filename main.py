@@ -22,6 +22,7 @@ from overlay import OverlayController
 from panel import Panel
 from parsers import format_mmss
 from session import RelaxSession
+from statswindow import StatisticsWindow
 
 # Shared-memory segment whose existence means "an instance is already running".
 # Creating it is atomic, so two launches milliseconds apart cannot both win.
@@ -92,6 +93,8 @@ class TrayApp:
         self._preview_timer.timeout.connect(self._end_preview)
         self._panel.preview_theme.connect(self._show_preview)
         self._panel.preview_posture.connect(self._show_posture_preview)
+        self._panel.open_statistics.connect(self._show_statistics)
+        self._statistics = None
 
         self._timer = QTimer(app)
         self._timer.setInterval(TICK_MS)
@@ -136,6 +139,16 @@ class TrayApp:
             self._overlays.close()
         else:
             self._session.skip_break()
+
+    def _show_statistics(self):
+        # Kept between openings so it reappears where the user left it; the
+        # panel dismisses itself as soon as the window takes focus.
+        if self._statistics is None:
+            self._statistics = StatisticsWindow()
+        self._statistics.refresh()
+        self._statistics.show()
+        self._statistics.raise_()
+        self._statistics.activateWindow()
 
     def _on_posture_dismissed(self):
         # "Got it" ends a preview and a real reminder alike; the session call is

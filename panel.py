@@ -26,10 +26,21 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from datetime import datetime
+
 import config
 import icon
 import startup
-from parsers import PRESET_COLORS, UNIT_SECONDS, best_unit, format_mmss, parse_color, rgb255
+import stats
+from parsers import (
+    PRESET_COLORS,
+    UNIT_SECONDS,
+    best_unit,
+    format_duration,
+    format_mmss,
+    parse_color,
+    rgb255,
+)
 import version
 from theme import DARK, LIGHT
 
@@ -39,8 +50,8 @@ SHADOW_MARGIN = 18
 # Gap between the tray icon and the panel.
 ANCHOR_GAP = 8
 SIDE_PADDING = 20
-# Matches the 0.15s easeInOut the macOS popover animates its settings with.
-SETTINGS_ANIM_MS = 150
+# Matches the 0.15s easeInOut the macOS popover animates its sections with.
+SECTION_ANIM_MS = 150
 # QWIDGETSIZE_MAX; PySide does not export it.
 _UNBOUNDED = 16777215
 # Windows logo in the about line, sized to sit with 11px text.
@@ -94,6 +105,71 @@ class _DisclosureRow(QWidget):
 
     def mousePressEvent(self, event):
         self.clicked.emit()
+
+
+class _Section(QWidget):
+    """A disclosure row with a page that slides open under it.
+
+    Owns its own animation so the panel can have more than one collapsible
+    section without duplicating the plumbing.
+    """
+
+    opened = Signal()
+    resized = Signal()
+
+    def __init__(self, caption, page):
+        super().__init__()
+        self._page = page
+        self._open = False
+
+        self._row = _DisclosureRow(caption)
+        self._row.clicked.connect(self.toggle)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self._row)
+        layout.addWidget(page)
+        page.hide()
+
+        self._anim = QVariantAnimation(self)
+        self._anim.setDuration(SECTION_ANIM_MS)
+        self._anim.setEasingCurve(QEasingCurve.InOutQuad)
+        self._anim.valueChanged.connect(self._step)
+        self._anim.finished.connect(self._settled)
+
+    @property
+    def is_open(self):
+        return self._open
+
+    def toggle(self):
+        self._open = not self._open
+        self._row.set_open(self._open)
+
+        if self._open:
+            # It has to be visible to be animated, so it opens at zero height.
+            self._page.setMaximumHeight(0)
+            self._page.show()
+            self.opened.emit()
+            start, end = 0, self._page.sizeHint().height()
+        else:
+            start, end = self._page.height(), 0
+
+        self._anim.stop()
+        self._anim.setStartValue(start)
+        self._anim.setEndValue(end)
+        self._anim.start()
+
+    def _step(self, height):
+        self._page.setMaximumHeight(int(height))
+        self.resized.emit()
+
+    def _settled(self):
+        if self._open:
+            self._page.setMaximumHeight(_UNBOUNDED)  # let it grow again
+        else:
+            self._page.hide()
+        self.resized.emit()
 
 
 class _Switch(QCheckBox):
@@ -190,6 +266,7 @@ class _UnitPicker(QWidget):
 class Panel(QWidget):
     preview_theme = Signal()
     preview_posture = Signal()
+    open_statistics = Signal()
 
     def __init__(self, relax_config, session, on_quit):
         super().__init__(None, Qt.FramelessWindowHint | Qt.Tool | Qt.NoDropShadowWindowHint)
@@ -201,13 +278,6 @@ class Panel(QWidget):
         self._anchor = QRect()
         self._layout_key = None
         self._loading = False
-        self._settings_open = False
-
-        self._settings_anim = QVariantAnimation(self)
-        self._settings_anim.setDuration(SETTINGS_ANIM_MS)
-        self._settings_anim.setEasingCurve(QEasingCurve.InOutQuad)
-        self._settings_anim.valueChanged.connect(self._settings_step)
-        self._settings_anim.finished.connect(self._settings_settled)
 
         self._build()
         self._load_config()
@@ -309,15 +379,68 @@ class Panel(QWidget):
         layout.addWidget(form)
         layout.addWidget(_divider())
 
-        self._settings_button = _DisclosureRow("settings")
-        self._settings_button.clicked.connect(self._toggle_settings)
-        layout.addWidget(self._settings_button)
+        self._stats_section = _Section("stats", self._build_stats())
+        self._stats_section.opened.connect(self._refresh_stats)
+        self._stats_section.resized.connect(self._reflow)
+        layout.addWidget(self._stats_section)
 
-        self._settings = self._build_settings()
-        self._settings.hide()
-        layout.addWidget(self._settings)
+        layout.addWidget(_divider())
+
+        self._settings_section = _Section("settings", self._build_settings())
+        self._settings_section.resized.connect(self._reflow)
+        layout.addWidget(self._settings_section)
 
         return page
+
+    def _build_stats(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(SIDE_PADDING, 4, SIDE_PADDING, 10)
+        layout.setSpacing(SETTINGS_ROW_SPACING)
+
+        self._period = QComboBox()
+        for kind in stats.PANEL_PERIODS:
+            self._period.addItem(stats.PERIOD_LABELS[kind], kind)
+        self._period.setFocusPolicy(Qt.NoFocus)
+        self._period.setCursor(Qt.PointingHandCursor)
+        self._period.currentIndexChanged.connect(self._refresh_stats)
+        layout.addWidget(self._row("period", self._period))
+
+        self._metrics = {}
+        for key, caption in (
+            ("sessions", "sessions"),
+            ("session_time", "session time"),
+            ("breaks", "breaks"),
+            ("break_time", "break time"),
+            ("skipped", "skipped early"),
+        ):
+            value = QLabel("—")
+            value.setObjectName("metric")
+            self._metrics[key] = value
+            row = self._row(caption, value)
+            # The macOS dropdown only shows this one once something was skipped.
+            if key == "skipped":
+                self._skipped_row = row
+            layout.addWidget(row)
+
+        view_all = QPushButton("view all statistics  ↗")
+        view_all.setObjectName("plain")
+        view_all.setFocusPolicy(Qt.NoFocus)
+        view_all.setCursor(Qt.PointingHandCursor)
+        view_all.clicked.connect(self.open_statistics)
+        layout.addWidget(view_all)
+
+        return page
+
+    def _refresh_stats(self):
+        interval = stats.resolve_period(self._period.currentData(), datetime.now().astimezone())
+        summary = stats.summarise(stats.events_in(stats.read_all(), interval))
+        self._metrics["sessions"].setText(str(summary.sessions))
+        self._metrics["session_time"].setText(format_duration(summary.session_seconds))
+        self._metrics["breaks"].setText(str(summary.breaks))
+        self._metrics["break_time"].setText(format_duration(summary.break_seconds))
+        self._metrics["skipped"].setText(str(summary.skipped_early))
+        self._skipped_row.setVisible(bool(summary.skipped_early))
 
     def _duration_edit(self, width, alignment):
         edit = QLineEdit()
@@ -548,38 +671,6 @@ class Panel(QWidget):
         self._config.launch_at_login = self._launch_switch.isChecked()
         startup.set_enabled(self._config.launch_at_login)
         config.save(self._config)
-
-    def _toggle_settings(self):
-        self._settings_open = not self._settings_open
-        self._settings_button.set_open(self._settings_open)
-
-        if self._settings_open:
-            # It has to be visible to be animated, so it opens at zero height.
-            self._settings.setMaximumHeight(0)
-            self._settings.show()
-            start, end = 0, self._settings.sizeHint().height()
-        else:
-            start, end = self._settings.height(), 0
-
-        self._settings_anim.stop()
-        self._settings_anim.setStartValue(start)
-        self._settings_anim.setEndValue(end)
-        self._settings_anim.start()
-
-    def _settings_step(self, height):
-        self._settings.setMaximumHeight(int(height))
-        self._fit()
-        if self.isVisible():
-            self._place()
-
-    def _settings_settled(self):
-        if self._settings_open:
-            self._settings.setMaximumHeight(_UNBOUNDED)  # let it grow again
-        else:
-            self._settings.hide()
-        self._fit()
-        if self.isVisible():
-            self._place()
 
     def _apply_preset(self, interval_minutes, break_minutes):
         self._interval_edit.setText(str(interval_minutes))

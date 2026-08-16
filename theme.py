@@ -34,6 +34,7 @@ DARK = {
     "warning_soft": "rgba(255, 159, 10, 0.12)",
     "warning_soft_hover": "rgba(255, 159, 10, 0.20)",
     "menu_hover": "#2C2C2E",
+    "tile": "rgba(120, 120, 128, 0.16)",
 }
 
 # Accents follow Fluent rather than Apple here: the Apple blue, red and orange
@@ -59,6 +60,7 @@ LIGHT = {
     "warning_soft": "rgba(157, 93, 0, 0.10)",
     "warning_soft_hover": "rgba(157, 93, 0, 0.18)",
     "menu_hover": "#F0F0F0",
+    "tile": "rgba(0, 0, 0, 0.05)",
 }
 
 # `string.Template` rather than str.format: QSS is full of braces.
@@ -181,6 +183,26 @@ QComboBox QAbstractItemView {
     padding: 4px;
     selection-background-color: $menu_hover;
     outline: none;
+}
+
+QLabel#metric { color: $text; font-size: 12px; }
+
+QDialog { background-color: $bg; }
+
+/* Statistics window tiles. */
+QFrame#tile {
+    background-color: $tile;
+    border: none;
+    border-radius: 12px;
+}
+QLabel#tileLabel {
+    color: $secondary;
+    font-size: 10px;
+    letter-spacing: 1px;
+}
+QLabel#tilePath {
+    color: $faint;
+    font-size: 10px;
 }
 
 QLabel#about {
