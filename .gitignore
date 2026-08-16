@@ -1,0 +1,15 @@
+# Environments & IDE
+.venv/
+venv/
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Build output
+build/
+dist/
