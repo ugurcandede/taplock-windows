@@ -30,9 +30,8 @@ import config
 import icon
 import startup
 from parsers import PRESET_COLORS, UNIT_SECONDS, best_unit, format_mmss, parse_color, rgb255
+import version
 from theme import DARK, LIGHT
-
-VERSION = "0.1.0"
 
 CARD_WIDTH = 300
 # Room for the drop shadow: the outer widget is transparent, the card floats in it.
@@ -398,7 +397,7 @@ class Panel(QWidget):
         credit = QHBoxLayout()
         credit.setSpacing(5)
         credit.addStretch()
-        credit.addWidget(self._about_label("Built with ❤ for"))
+        credit.addWidget(self._about_label("Built with ❤️ for"))
         self._windows_logo = QLabel()
         self._windows_logo.setFixedSize(LOGO_PX, LOGO_PX)
         credit.addWidget(self._windows_logo)
@@ -420,7 +419,8 @@ class Panel(QWidget):
         style = f"color: {accent}; text-decoration: none;"
         return (
             f'<a href="https://github.com/ugurcandede" style="{style}">ugurcandede</a> · '
-            f'<a href="https://github.com/ugurcandede/taplock-windows" style="{style}">v{VERSION}</a>'
+            f'<a href="https://github.com/ugurcandede/taplock-windows/releases/latest"'
+            f' style="{style}">{version.display()}</a>'
         )
 
     def _about_label(self, text):
