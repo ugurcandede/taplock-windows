@@ -24,8 +24,6 @@ IDLE = "idle"
 WAITING = "waiting"
 BREAK = "break"
 
-PRE_NOTIFY_LEAD = 10  # seconds before a break
-PRE_NOTIFY_MIN_INTERVAL = 15  # not worth a heads-up on intervals this short
 POSTURE_MIN_INTERVAL = 10
 POSTURE_VISIBLE = 10  # posture reminder auto-dismiss
 
@@ -43,7 +41,9 @@ class RelaxSession(QObject):
     break_ended = Signal()
     posture_due = Signal()
     posture_dismissed = Signal()
-    play_sound = Signal(str)  # "pre" | "start" | "end"
+    play_sound = Signal(str)  # "start" | "end"
+    # macOS also chimes ten seconds before a break. Dropped here: two sounds a
+    # cycle is already the most a background app should ask for.
 
     def __init__(self, monotonic=time.monotonic, wall=None, parent=None):
         super().__init__(parent)
@@ -53,7 +53,6 @@ class RelaxSession(QObject):
         self._state = IDLE
         self._config = None
         self._deadline = 0.0
-        self._pre_at = None
         self._posture_at = None
         self._posture_off_at = None
         self._session_started_at = None
@@ -157,10 +156,6 @@ class RelaxSession(QObject):
             self._posture_off_at = now + POSTURE_VISIBLE
             self.posture_due.emit()
 
-        if self._pre_at is not None and now >= self._pre_at:
-            self._pre_at = None
-            self.play_sound.emit("pre")
-
         if now >= self._deadline:
             if self._state == WAITING:
                 self._start_break()
@@ -178,10 +173,6 @@ class RelaxSession(QObject):
         self._state = WAITING
         self._deadline = now + config.interval
 
-        self._pre_at = None
-        if not config.silent and config.interval > PRE_NOTIFY_MIN_INTERVAL:
-            self._pre_at = self._deadline - PRE_NOTIFY_LEAD
-
         self._posture_at = None
         if config.show_posture_reminder and config.interval > POSTURE_MIN_INTERVAL:
             self._posture_at = now + config.interval / 2
@@ -191,7 +182,6 @@ class RelaxSession(QObject):
         self._state = BREAK
         self._break_started_at = self._wall()
         self._deadline = self._monotonic() + self._config.break_duration
-        self._pre_at = None
         self._posture_at = None
         if not self._config.silent:
             self.play_sound.emit("start")

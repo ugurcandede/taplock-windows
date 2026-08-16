@@ -134,17 +134,7 @@ def test_break_signals(relax, clock):
     assert seen == ["start", "end"]
 
 
-def test_pre_notify_fires_ten_seconds_before_the_break(relax, clock):
-    sounds = []
-    relax.play_sound.connect(sounds.append)
-    relax.start(config(silent=False))
-    run_for(relax, clock, 89)
-    assert sounds == []
-    run_for(relax, clock, 1)
-    assert sounds == ["pre"]
-
-
-def test_no_pre_notify_when_silent(relax, clock):
+def test_silent_makes_no_sound(relax, clock):
     sounds = []
     relax.play_sound.connect(sounds.append)
     relax.start(config(silent=True))
@@ -152,12 +142,13 @@ def test_no_pre_notify_when_silent(relax, clock):
     assert sounds == []
 
 
-def test_no_pre_notify_on_short_intervals(relax, clock):
+def test_nothing_sounds_before_a_break(relax, clock):
+    """macOS chimes ten seconds ahead; this build only marks the boundaries."""
     sounds = []
     relax.play_sound.connect(sounds.append)
-    relax.start(config(interval=15, break_duration=5, silent=False))
-    run_for(relax, clock, 15)
-    assert "pre" not in sounds
+    relax.start(config(silent=False))
+    run_for(relax, clock, 99)
+    assert sounds == []
 
 
 def test_break_sounds(relax, clock):

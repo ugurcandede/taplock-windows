@@ -40,7 +40,6 @@ PREVIEW_MS = 5000
 # not settable from the API, which is fine: the user's sound scheme wins, and a
 # scheme set to "No Sounds" correctly produces silence.
 _SOUNDS = {
-    "pre": "Notification.Default",
     "start": "Notification.Reminder",
     "end": "SystemAsterisk",
 }
