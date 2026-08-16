@@ -5,15 +5,17 @@ would give the transient dismiss behaviour for free, but keyboard focus inside a
 popup is unreliable and this panel holds text fields, so it hides on
 `WindowDeactivate` instead.
 
-Two layouts share the card: the idle form (interval / break / presets / start)
-and the running view (countdown / skip / stop), swapped from the session's
-`state_changed`.
+Two layouts share the card: the idle form (interval / break / presets / start /
+settings) and the running view (countdown / skip / stop), swapped from the
+session's `state_changed`.
 """
 
-from PySide6.QtCore import QEvent, QRect, Qt
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QIntValidator
+from PySide6.QtCore import QEvent, QRect, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QIntValidator, QPainter
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
+    QComboBox,
     QFrame,
     QGraphicsDropShadowEffect,
     QHBoxLayout,
@@ -25,7 +27,10 @@ from PySide6.QtWidgets import (
 )
 
 import config
-from parsers import UNIT_SECONDS, best_unit, format_mmss
+import startup
+from parsers import PRESET_COLORS, UNIT_SECONDS, best_unit, format_mmss, parse_color, rgb255
+
+VERSION = "0.1.0"
 
 CARD_WIDTH = 300
 # Room for the drop shadow: the outer widget is transparent, the card floats in it.
@@ -51,6 +56,90 @@ def _divider():
     return line
 
 
+def _caption(text):
+    label = QLabel(text)
+    label.setObjectName("secondary")
+    return label
+
+
+class _DisclosureRow(QWidget):
+    """Label left, chevron right, whole row clickable -- a plain QPushButton
+    centres its text and cannot separate the two."""
+
+    clicked = Signal()
+
+    def __init__(self, text):
+        super().__init__()
+        self.setCursor(Qt.PointingHandCursor)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(SIDE_PADDING, 8, SIDE_PADDING, 8)
+        layout.addWidget(_caption(text))
+        layout.addStretch()
+        self._chevron = _caption("›")
+        layout.addWidget(self._chevron)
+
+    def set_open(self, is_open):
+        self._chevron.setText("⌄" if is_open else "›")
+
+    def mousePressEvent(self, event):
+        self.clicked.emit()
+
+
+class _Switch(QCheckBox):
+    """Windows 11 style toggle. Qt has no switch widget and QSS cannot draw the
+    knob, so it is painted here; the QCheckBox underneath handles the clicking."""
+
+    WIDTH, HEIGHT = 34, 18
+
+    def __init__(self):
+        super().__init__()
+        self.setFixedSize(self.WIDTH, self.HEIGHT)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.apply_theme(True)
+
+    def apply_theme(self, dark):
+        self._off = QColor("#48484A" if dark else "#C8C6C4")
+        self._on = QColor("#0A84FF" if dark else "#0067C0")
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(self._on if self.isChecked() else self._off)
+        painter.drawRoundedRect(self.rect(), self.HEIGHT / 2, self.HEIGHT / 2)
+        size = self.HEIGHT - 4
+        x = self.WIDTH - size - 2 if self.isChecked() else 2
+        painter.setBrush(QColor("#FFFFFF"))
+        painter.drawEllipse(x, 2, size, size)
+
+
+class _Swatch(QPushButton):
+    """One overlay colour. The fill is the value itself, so it is set inline --
+    the one case the stylesheet cannot cover."""
+
+    def __init__(self, name):
+        super().__init__()
+        self.name = name
+        self._rgb = rgb255(parse_color(name))
+        self.setCheckable(True)
+        self.setFixedSize(22, 22)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setToolTip(name)
+        self.apply_theme(True)
+
+    def apply_theme(self, dark):
+        ring = "#FFFFFF" if dark else "#1B1B1F"
+        r, g, b = self._rgb
+        self.setStyleSheet(
+            f"QPushButton {{ background: rgb({r}, {g}, {b});"
+            f" border: 1px solid rgba(128, 128, 128, 0.4); border-radius: 11px; }}"
+            f"QPushButton:checked {{ border: 2px solid {ring}; }}"
+        )
+
+
 class _UnitPicker(QWidget):
     """Captioned s / m / h selector."""
 
@@ -60,8 +149,7 @@ class _UnitPicker(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
 
-        label = QLabel(caption)
-        label.setObjectName("secondary")
+        label = _caption(caption)
         label.setAlignment(Qt.AlignCenter)
         layout.addWidget(label)
 
@@ -89,6 +177,8 @@ class _UnitPicker(QWidget):
 
 
 class Panel(QWidget):
+    preview_theme = Signal()
+
     def __init__(self, relax_config, session, on_quit):
         super().__init__(None, Qt.FramelessWindowHint | Qt.Tool | Qt.NoDropShadowWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -98,6 +188,7 @@ class Panel(QWidget):
         self._on_quit = on_quit
         self._anchor = QRect()
         self._layout_key = None
+        self._loading = False
 
         self._build()
         self._load_config()
@@ -148,8 +239,13 @@ class Panel(QWidget):
     def _build_idle(self):
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(SIDE_PADDING, 6, SIDE_PADDING, 10)
-        layout.setSpacing(8)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        form = QWidget()
+        form_layout = QVBoxLayout(form)
+        form_layout.setContentsMargins(SIDE_PADDING, 6, SIDE_PADDING, 10)
+        form_layout.setSpacing(8)
 
         entry = QHBoxLayout()
         entry.setSpacing(4)
@@ -163,7 +259,7 @@ class Panel(QWidget):
         self._break_edit = self._duration_edit(60, Qt.AlignLeft | Qt.AlignVCenter)
         entry.addWidget(self._break_edit)
         entry.addStretch()
-        layout.addLayout(entry)
+        form_layout.addLayout(entry)
 
         units = QHBoxLayout()
         units.setSpacing(16)
@@ -171,14 +267,14 @@ class Panel(QWidget):
         self._break_unit = _UnitPicker("break")
         units.addWidget(self._interval_unit)
         units.addWidget(self._break_unit)
-        layout.addLayout(units)
+        form_layout.addLayout(units)
 
         start = QPushButton("start")
         start.setObjectName("primary")
         start.setFocusPolicy(Qt.NoFocus)
         start.setCursor(Qt.PointingHandCursor)
         start.clicked.connect(self._start)
-        layout.addWidget(start)
+        form_layout.addWidget(start)
 
         presets = QHBoxLayout()
         presets.setSpacing(0)
@@ -187,11 +283,20 @@ class Panel(QWidget):
             button.setObjectName("preset")
             button.setFocusPolicy(Qt.NoFocus)
             button.setCursor(Qt.PointingHandCursor)
-            button.clicked.connect(
-                lambda _=False, i=interval, b=break_minutes: self._apply_preset(i, b)
-            )
+            button.clicked.connect(lambda _=False, i=interval, b=break_minutes: self._apply_preset(i, b))
             presets.addWidget(button)
-        layout.addLayout(presets)
+        form_layout.addLayout(presets)
+
+        layout.addWidget(form)
+        layout.addWidget(_divider())
+
+        self._settings_button = _DisclosureRow("settings")
+        self._settings_button.clicked.connect(self._toggle_settings)
+        layout.addWidget(self._settings_button)
+
+        self._settings = self._build_settings()
+        self._settings.hide()
+        layout.addWidget(self._settings)
 
         return page
 
@@ -210,6 +315,89 @@ class Panel(QWidget):
         # does by clearing its first responder on appear.
         edit.setFocusPolicy(Qt.ClickFocus)
         return edit
+
+    def _build_settings(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(SIDE_PADDING, 4, SIDE_PADDING, 10)
+        layout.setSpacing(10)
+
+        # theme + preview
+        theme_row = QHBoxLayout()
+        theme_row.addWidget(_caption("theme"))
+        theme_row.addStretch()
+        preview = QPushButton("preview")
+        preview.setObjectName("preset")
+        preview.setFocusPolicy(Qt.NoFocus)
+        preview.setCursor(Qt.PointingHandCursor)
+        preview.setToolTip("Show this theme for 5 seconds")
+        preview.clicked.connect(self.preview_theme)
+        theme_row.addWidget(preview)
+        self._theme_box = QComboBox()
+        self._theme_box.addItems(config.THEMES)
+        self._theme_box.setFocusPolicy(Qt.NoFocus)
+        self._theme_box.setCursor(Qt.PointingHandCursor)
+        self._theme_box.currentTextChanged.connect(self._save_settings)
+        theme_row.addWidget(self._theme_box)
+        layout.addLayout(theme_row)
+
+        # colour swatches
+        colour_row = QHBoxLayout()
+        colour_row.addWidget(_caption("color"))
+        colour_row.addStretch()
+        colour_row.setSpacing(6)
+        self._swatches = QButtonGroup(self)
+        for name in PRESET_COLORS:
+            swatch = _Swatch(name)
+            self._swatches.addButton(swatch)
+            colour_row.addWidget(swatch)
+        self._swatches.buttonClicked.connect(self._save_settings)
+        layout.addLayout(colour_row)
+
+        # transparency pills
+        alpha_row = QHBoxLayout()
+        alpha_row.addWidget(_caption("transparency"))
+        alpha_row.addStretch()
+        alpha_row.setSpacing(2)
+        self._alphas = QButtonGroup(self)
+        for label, value in config.TRANSPARENCY:
+            pill = QPushButton(str(label))
+            pill.setObjectName("unit")
+            pill.setCheckable(True)
+            pill.setFocusPolicy(Qt.NoFocus)
+            pill.setCursor(Qt.PointingHandCursor)
+            pill.opacity = value
+            self._alphas.addButton(pill)
+            alpha_row.addWidget(pill)
+        self._alphas.buttonClicked.connect(self._save_settings)
+        layout.addLayout(alpha_row)
+
+        self._launch_switch = self._switch_row(layout, "launch at login")
+        self._silent_switch = self._switch_row(layout, "silent")
+
+        layout.addWidget(_divider())
+
+        about = QLabel(
+            "Built with ❤ for 🖥 users<br>"
+            f'<a href="https://github.com/ugurcandede">ugurcandede</a> · v{VERSION}<br>'
+            '<a href="https://icons8.com">leaf icon by Icons8</a>'
+        )
+        about.setObjectName("about")
+        about.setAlignment(Qt.AlignCenter)
+        about.setOpenExternalLinks(True)
+        layout.addWidget(about)
+
+        return page
+
+    def _switch_row(self, layout, label):
+        row = QHBoxLayout()
+        row.addWidget(_caption(label))
+        row.addStretch()
+        switch = _Switch()
+        switch.toggled.connect(self._save_settings)
+        row.addWidget(switch)
+        layout.addLayout(row)
+        return switch
 
     def _build_active(self):
         page = QWidget()
@@ -245,20 +433,59 @@ class Panel(QWidget):
 
         return page
 
+    # ---- theme -----------------------------------------------------------
+
     def apply_theme(self, dark):
-        """The stylesheet handles colours; the shadow is set in code, and the
-        heavy one that reads well on a dark card is a smudge on a light one."""
+        """The stylesheet handles colours; these three are painted in code, and
+        the values that read well on a dark card are wrong on a light one."""
         self._shadow.setColor(QColor(0, 0, 0, 150 if dark else 55))
+        for switch in (self._launch_switch, self._silent_switch):
+            switch.apply_theme(dark)
+        for swatch in self._swatches.buttons():
+            swatch.apply_theme(dark)
 
     # ---- config <-> form -------------------------------------------------
 
     def _load_config(self):
+        self._loading = True  # setters below would otherwise write straight back
         interval, unit = best_unit(self._config.interval)
         self._interval_edit.setText(str(interval))
         self._interval_unit.set_unit(unit)
         value, unit = best_unit(self._config.break_duration)
         self._break_edit.setText(str(value))
         self._break_unit.set_unit(unit)
+
+        self._theme_box.setCurrentText(self._config.theme)
+        for swatch in self._swatches.buttons():
+            swatch.setChecked(swatch.name == self._config.color)
+        nearest = min(self._alphas.buttons(), key=lambda b: abs(b.opacity - self._config.opacity))
+        nearest.setChecked(True)
+        self._silent_switch.setChecked(self._config.silent)
+        self._launch_switch.setChecked(startup.is_enabled())
+        self._loading = False
+
+    def _save_settings(self):
+        """macOS only persists on start, so settings changed without starting a
+        session were lost. Written on every change here instead."""
+        if self._loading:
+            return
+        self._config.theme = self._theme_box.currentText()
+        checked = self._swatches.checkedButton()
+        if checked is not None:
+            self._config.color = checked.name
+        alpha = self._alphas.checkedButton()
+        if alpha is not None:
+            self._config.opacity = alpha.opacity
+        self._config.silent = self._silent_switch.isChecked()
+        self._config.launch_at_login = self._launch_switch.isChecked()
+        startup.set_enabled(self._config.launch_at_login)
+        config.save(self._config)
+
+    def _toggle_settings(self):
+        showing = not self._settings.isVisible()
+        self._settings.setVisible(showing)
+        self._settings_button.set_open(showing)
+        self._reflow()
 
     def _apply_preset(self, interval_minutes, break_minutes):
         self._interval_edit.setText(str(interval_minutes))

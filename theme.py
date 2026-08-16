@@ -158,6 +158,30 @@ QPushButton#plain {
 }
 QPushButton#plain:hover { color: $text; }
 
+QComboBox {
+    background-color: $accent_soft;
+    border: none;
+    border-radius: 6px;
+    padding: 4px 8px;
+    color: $text;
+    font-size: 12px;
+    min-width: 88px;
+}
+QComboBox:hover { background-color: $accent_soft_hover; }
+QComboBox::drop-down { border: none; width: 16px; }
+QComboBox QAbstractItemView {
+    background-color: $bg;
+    border: 1px solid $divider;
+    border-radius: 6px;
+    color: $text;
+    padding: 4px;
+    selection-background-color: $menu_hover;
+    outline: none;
+}
+
+QLabel#about { color: $faint; font-size: 10px; }
+QLabel#about a { color: $accent; text-decoration: none; }
+
 /* The tray context menu picks this up too. */
 QMenu {
     background-color: $bg;

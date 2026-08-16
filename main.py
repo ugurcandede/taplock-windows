@@ -9,6 +9,7 @@ session, which keeps the state machine testable without Qt.
 """
 
 import sys
+import winsound
 
 from PySide6.QtCore import QSharedMemory, Qt, QTimer
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
@@ -29,6 +30,30 @@ _GUARD_KEY = "TapLock-single-instance"
 _IPC_KEY = "TapLock-ipc"
 
 TICK_MS = 1000
+
+# How long a theme preview stays up, matching the macOS popover.
+PREVIEW_MS = 5000
+
+# Windows system sounds standing in for macOS's Pop / Blow / Glass. Volume is
+# not settable from the API, which is fine: the user's sound scheme wins, and a
+# scheme set to "No Sounds" correctly produces silence.
+_SOUNDS = {
+    "pre": "Notification.Default",
+    "start": "Notification.Reminder",
+    "end": "SystemAsterisk",
+}
+
+
+def _play(kind):
+    try:
+        winsound.PlaySound(
+            _SOUNDS[kind],
+            # SND_NODEFAULT matters: without it a missing alias falls back to
+            # the generic Windows ding.
+            winsound.SND_ALIAS | winsound.SND_ASYNC | winsound.SND_NODEFAULT,
+        )
+    except RuntimeError:
+        pass  # the scheme can be emptied; a missing sound is not an error here
 
 
 class TrayApp:
@@ -52,9 +77,17 @@ class TrayApp:
         self._tray.activated.connect(self._on_activated)
 
         self._overlays = OverlayController(app)
-        self._overlays.skipped.connect(self._session.skip_break)
+        self._overlays.skipped.connect(self._on_skip)
         self._session.break_started.connect(self._open_overlay)
         self._session.break_ended.connect(self._overlays.close)
+        self._session.play_sound.connect(_play)
+
+        # Previews reuse the break overlays; settings are only reachable while
+        # idle, so there is never a real break to collide with.
+        self._preview_timer = QTimer(app)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.timeout.connect(self._overlays.close)
+        self._panel.preview_theme.connect(self._show_preview)
 
         self._timer = QTimer(app)
         self._timer.setInterval(TICK_MS)
@@ -74,6 +107,21 @@ class TrayApp:
     def _open_overlay(self):
         self._overlays.open(self._session.config)
         self._overlays.set_remaining(self._session.remaining)
+
+    def _show_preview(self):
+        if self._session.running:
+            return
+        self._overlays.open(self._config)
+        self._overlays.set_remaining(self._config.break_duration)
+        self._preview_timer.start(PREVIEW_MS)
+
+    def _on_skip(self):
+        # The same Skip button dismisses a preview and skips a real break.
+        if self._preview_timer.isActive():
+            self._preview_timer.stop()
+            self._overlays.close()
+        else:
+            self._session.skip_break()
 
     # ---- tray ------------------------------------------------------------
 
