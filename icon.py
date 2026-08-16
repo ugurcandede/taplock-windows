@@ -1,15 +1,19 @@
 """App and tray icons.
 
-Everything derives from the macOS TapLock artwork (`assets/icon.png`) so the two
-platforms stay visually identical. Pillow is kept isolated in this module -- it
-is the only place image generation happens, so the dependency stays easy to find.
+The window and taskbar icon is the macOS TapLock artwork, so the two platforms
+look the same in the places that matter. The tray needs something else: that
+artwork carries its own dark rounded-square background, which at 16px reads as a
+smudge next to Windows' own transparent monochrome glyphs. The tray therefore
+uses a leaf, mirroring the macOS menu bar item -- outline when idle, filled and
+green while a session runs, the same distinction SF Symbols draws between `leaf`
+and `leaf.fill`.
 
-The tray icon carries no separate "relax" glyph: macOS uses an SF Symbols leaf,
-which is a system resource we cannot redistribute. Session state is shown as an
-accent dot badge on the corner of the app icon instead.
+Pillow is kept isolated in this module -- it is the only place image generation
+happens, so the dependency stays easy to find.
 """
 
 import io
+import winreg
 from functools import lru_cache
 from pathlib import Path
 
@@ -18,23 +22,22 @@ from PySide6.QtGui import QIcon, QPixmap
 
 _ASSETS = Path(__file__).resolve().parent / "assets"
 _ICO = _ASSETS / "icon.ico"
-_PNG = _ASSETS / "icon.png"
+_LEAF_IDLE = _ASSETS / "leaf.png"
+_LEAF_ACTIVE = _ASSETS / "leaf-filled.png"
 
-# Windows picks a tray render by DPI. Each size is drawn separately rather than
-# scaled from one bitmap: the badge needs a larger proportion at 16px or it
-# vanishes, so a single scaled source would not survive.
+# Windows picks a tray render by DPI. Each size is rendered separately so the
+# outline can be thickened only where it needs it.
 _TRAY_SIZES = (16, 20, 24, 32, 48)
 
-# icon.png's own background, reused as the badge ring so the dot reads as a
-# badge rather than a blob merging into the padlock.
-_TILE_BG = (28, 28, 30)
+# A running session is always this green, whatever the overlay accent is set to:
+# the tray has to mean "running" at a glance, not carry the overlay's theming.
+ACTIVE_GREEN = (48, 209, 88)
+_GLYPH_ON_DARK = (255, 255, 255)
+_GLYPH_ON_LIGHT = (32, 32, 34)
 
-_SUPERSAMPLE = 4
+_PERSONALIZE = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
 
-
-@lru_cache(maxsize=1)
-def _source() -> Image.Image:
-    return Image.open(_PNG).convert("RGBA")
+_SUPERSAMPLE = 8
 
 
 def _to_pixmap(image: Image.Image) -> QPixmap:
@@ -45,27 +48,55 @@ def _to_pixmap(image: Image.Image) -> QPixmap:
     return pixmap
 
 
-def _badge_fraction(size: int) -> float:
-    """Badge diameter as a fraction of the icon. Hand-tuned: small renders need a
-    disproportionately large dot to stay legible in the tray."""
-    if size <= 16:
-        return 0.30
-    if size <= 24:
-        return 0.24
-    return 0.19
+def taskbar_is_light() -> bool:
+    """Whether a white glyph would be invisible in the tray.
+
+    Windows keeps the taskbar theme (`SystemUsesLightTheme`) separate from the
+    app theme (`AppsUseLightTheme`) and Qt only exposes the latter, so read the
+    setting that actually decides this.
+    """
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _PERSONALIZE) as key:
+            return bool(winreg.QueryValueEx(key, "SystemUsesLightTheme")[0])
+    except OSError:
+        return False
 
 
-def _tray_pixmap(size: int, active: bool, accent: tuple[int, int, int]) -> QPixmap:
+@lru_cache(maxsize=2)
+def _leaf_alpha(path: Path) -> Image.Image:
+    # The source glyphs are black on transparent, so the alpha channel is
+    # already the mask, antialiasing included.
+    return Image.open(path).convert("RGBA").getchannel("A")
+
+
+def _fit(mask: Image.Image, n: int, margin: float = 0.02) -> Image.Image:
+    """Crop to the ink and scale it to fill the cell, still supersampled so the
+    downsample happens exactly once."""
+    box = mask.getbbox()
+    if box:
+        mask = mask.crop(box)
+    target = max(1, round(n * (1 - 2 * margin)))
+    scale = target / max(mask.size)
+    mask = mask.resize((max(1, round(mask.width * scale)), max(1, round(mask.height * scale))), Image.LANCZOS)
+    canvas = Image.new("L", (n, n), 0)
+    canvas.paste(mask, ((n - mask.width) // 2, (n - mask.height) // 2))
+    return canvas
+
+
+@lru_cache(maxsize=32)
+def _tray_pixmap(size: int, active: bool, colour: tuple[int, int, int]) -> QPixmap:
     n = size * _SUPERSAMPLE
-    image = _source().resize((n, n), Image.LANCZOS)
+    mask = _leaf_alpha(_LEAF_ACTIVE if active else _LEAF_IDLE).resize((n, n), Image.LANCZOS)
 
-    if active:
-        d = _badge_fraction(size) * n
-        margin = 0.04 * n
-        box = [n - margin - d, n - margin - d, n - margin, n - margin]
-        ring = max(_SUPERSAMPLE, round(size * 0.035) * _SUPERSAMPLE)
-        ImageDraw.Draw(image).ellipse(box, fill=(*accent, 255), outline=(*_TILE_BG, 255), width=ring)
+    if not active and size <= 20:
+        # The outline stroke is under a pixel wide at these sizes and greys out
+        # into a smudge; dilate it slightly before the downsample. The filled
+        # glyph has no thin strokes and needs none.
+        mask = mask.filter(ImageFilter.MaxFilter(_SUPERSAMPLE | 1))
 
+    mask = _fit(mask, n)
+    image = Image.new("RGBA", (n, n), (0, 0, 0, 0))
+    image.paste(Image.new("RGBA", (n, n), (*colour, 255)), (0, 0), mask)
     return _to_pixmap(image.resize((size, size), Image.LANCZOS))
 
 
@@ -74,11 +105,12 @@ def app_icon() -> QIcon:
     return QIcon(str(_ICO))
 
 
-def tray_icon(active: bool, accent: tuple[int, int, int]) -> QIcon:
-    """Tray icon; `active` adds the running-session badge in `accent`."""
+def tray_icon(active: bool) -> QIcon:
+    """Outline leaf when idle, filled green leaf while a session runs."""
+    colour = ACTIVE_GREEN if active else (_GLYPH_ON_LIGHT if taskbar_is_light() else _GLYPH_ON_DARK)
     icon = QIcon()
     for size in _TRAY_SIZES:
-        icon.addPixmap(_tray_pixmap(size, active, accent))
+        icon.addPixmap(_tray_pixmap(size, active, colour))
     return icon
 
 

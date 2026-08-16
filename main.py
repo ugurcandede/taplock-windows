@@ -18,7 +18,7 @@ import config
 import icon
 from overlay import OverlayController
 from panel import Panel
-from parsers import format_mmss, parse_color, rgb255
+from parsers import format_mmss
 from session import RelaxSession
 from theme import STYLESHEET
 
@@ -58,6 +58,7 @@ class TrayApp:
         self._timer.start()
 
         self._session.state_changed.connect(self._refresh_tray)
+        app.styleHints().colorSchemeChanged.connect(self._theme_changed)
 
     def _tick(self):
         self._session.tick()
@@ -70,15 +71,19 @@ class TrayApp:
 
     # ---- tray ------------------------------------------------------------
 
-    def _accent(self):
-        return rgb255(parse_color(self._config.color) or parse_color("green"))
+    def _theme_changed(self):
+        # Qt reports the app theme, we render against the taskbar theme; they are
+        # separate Windows settings but are normally switched together, so this
+        # is the right moment to re-render the glyph in the other colour.
+        self._tray_shows_active = None
+        self._refresh_tray()
 
     def _refresh_tray(self):
         running = self._session.running
-        # The tooltip changes every second; the icon only when the badge does.
+        # The tooltip changes every second; the icon only when the glyph does.
         if running != self._tray_shows_active:
             self._tray_shows_active = running
-            self._tray.setIcon(icon.tray_icon(running, self._accent()))
+            self._tray.setIcon(icon.tray_icon(running))
         if running:
             phase = "break" if self._session.on_break else "next break"
             self._tray.setToolTip(f"TapLock — {phase} in {format_mmss(self._session.remaining)}")
