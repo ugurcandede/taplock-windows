@@ -29,11 +29,17 @@ _LEAF_ACTIVE = _ASSETS / "leaf-filled.png"
 # rather than scaled off one bitmap, so the thin outline resamples cleanly.
 _TRAY_SIZES = (16, 20, 24, 32, 48)
 
-# A running session is always this green, whatever the overlay accent is set to:
-# the tray has to mean "running" at a glance, not carry the overlay's theming.
-ACTIVE_GREEN = (48, 209, 88)
+# A running session is always green, whatever the overlay accent is set to: the
+# tray has to mean "running" at a glance, not carry the overlay's theming.
+#
+# It cannot be one green, though. Apple's systemGreen scores 8.2:1 against the
+# dark taskbar but only 1.8:1 against the light one, where it washes out
+# completely; Windows' Fluent green is the reverse, 3.1:1 dark and 4.8:1 light.
+# So the running colour switches with the theme, exactly like the idle glyph.
 _GLYPH_ON_DARK = (255, 255, 255)
 _GLYPH_ON_LIGHT = (32, 32, 34)
+_ACTIVE_ON_DARK = (48, 209, 88)  # Apple systemGreen
+_ACTIVE_ON_LIGHT = (16, 124, 16)  # Windows Fluent green
 
 _PERSONALIZE = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
 
@@ -105,7 +111,10 @@ def app_icon() -> QIcon:
 
 def tray_icon(active: bool) -> QIcon:
     """Outline leaf when idle, filled green leaf while a session runs."""
-    colour = ACTIVE_GREEN if active else (_GLYPH_ON_LIGHT if taskbar_is_light() else _GLYPH_ON_DARK)
+    if taskbar_is_light():
+        colour = _ACTIVE_ON_LIGHT if active else _GLYPH_ON_LIGHT
+    else:
+        colour = _ACTIVE_ON_DARK if active else _GLYPH_ON_DARK
     icon = QIcon()
     for size in _TRAY_SIZES:
         icon.addPixmap(_tray_pixmap(size, active, colour))
