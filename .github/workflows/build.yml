@@ -68,16 +68,16 @@ jobs:
       - name: Build
         run: pyinstaller --noconfirm --clean taplock.spec
 
-      - name: Package
+      - name: Checksum
         id: package
         shell: pwsh
         run: |
-          Compress-Archive -Path dist/TapLock -DestinationPath TapLock-windows.zip
-          $hash = (Get-FileHash TapLock-windows.zip -Algorithm SHA256).Hash
+          # The build is a single file, so it ships as-is: no archive to extract.
+          $hash = (Get-FileHash dist/TapLock.exe -Algorithm SHA256).Hash
           # Out-File rather than >>: the redirect operator picks up the console
           # encoding and can write a BOM the runner then fails to parse.
           "sha256=$hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          Write-Host ("{0:N1} MB" -f ((Get-Item TapLock-windows.zip).Length / 1MB))
+          Write-Host ("{0:N1} MB" -f ((Get-Item dist/TapLock.exe).Length / 1MB))
 
       - name: Create tag
         run: |
@@ -92,13 +92,14 @@ jobs:
           tag_name: ${{ steps.version.outputs.tag }}
           name: TapLock for Windows ${{ steps.version.outputs.tag }}
           generate_release_notes: true
-          files: TapLock-windows.zip
+          files: dist/TapLock.exe
           body: |
             **SHA256:** `${{ steps.package.outputs.sha256 }}`
 
             ### Install
 
-            Download `TapLock-windows.zip`, extract it anywhere, and run `TapLock.exe`.
+            Download `TapLock.exe` and run it. There is nothing to extract and
+            nothing to install; it lives in the notification area.
 
             The executable is unsigned, so SmartScreen may stop it the first
             time — choose **More info → Run anyway**.

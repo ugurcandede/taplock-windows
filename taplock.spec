@@ -1,8 +1,10 @@
 # PyInstaller build. Run with: pyinstaller taplock.spec
 #
-# One directory rather than one file: a one-file build unpacks the whole of Qt
-# into a temp folder on every launch, and this app is meant to start at login
-# and sit in the tray. The zip contains a folder either way.
+# One file: a single TapLock.exe with nothing beside it. The bootloader unpacks
+# Qt to a temp folder on every launch and deletes it on exit -- there is no
+# reuse between runs, that is not something PyInstaller offers -- but measured
+# on this machine it costs 0.64s warm against 0.38s for a one-directory build.
+# A quarter of a second is not worth handing the user a folder to keep together.
 
 from PyInstaller.utils.hooks import collect_submodules  # noqa: F401  (kept for reference)
 
@@ -86,21 +88,17 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.datas,
     [],
-    exclude_binaries=True,
     name="TapLock",
     debug=False,
     strip=False,
     upx=False,
     console=False,  # tray app: a console window would be wrong at login
     icon="assets/icon.ico",
-)
-
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=False,
-    name="TapLock",
+    # Unpack beside the config and the event log rather than into %TEMP%. The
+    # bootloader still makes a _MEIxxxxxx folder there per run and removes it on
+    # exit, so a stale one only survives a crash.
+    runtime_tmpdir=r"%APPDATA%\taplock",
 )

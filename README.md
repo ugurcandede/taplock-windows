@@ -74,9 +74,9 @@ Colour, transparency and theme are all set from the panel, with a five-second pr
 
 ## Install
 
-Download **`TapLock-windows.zip`** from the
-[latest release](https://github.com/ugurcandede/taplock-windows/releases/latest), extract it anywhere, and run
-`TapLock.exe`.
+Download **`TapLock.exe`** from the
+[latest release](https://github.com/ugurcandede/taplock-windows/releases/latest) and run it. A single file — nothing to
+extract, nothing to install.
 
 The executable is unsigned, so SmartScreen may stop it the first time — choose **More info → Run anyway**.
 
