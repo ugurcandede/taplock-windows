@@ -59,8 +59,14 @@ GLOW_MAX_ALPHA = 0.6
 
 
 def _font(pixel_size, weight, mono=False):
+    """Same families the stylesheet uses, so the overlays match the panel.
+
+    Plain Segoe UI rather than Variable Display even for the large overlay text:
+    one face across the whole app is worth more than the optical tuning Display
+    would add at 42px.
+    """
     font = QFont()
-    font.setFamilies(["Cascadia Mono", "Consolas"] if mono else ["Segoe UI Variable Display", "Segoe UI"])
+    font.setFamilies(["Cascadia Mono", "Consolas"] if mono else ["Segoe UI"])
     font.setPixelSize(pixel_size)
     font.setWeight(weight)
     return font
@@ -585,7 +591,8 @@ class PostureReminder(_GlassOverlay):
             radius=POSTURE_RADIUS,
             tint=(28, 28, 30, 225) if dark else (250, 250, 252, 235),
             blur=POSTURE_BLUR,
-            shadow_blur=8,
+            # shadow_blur=8,
+            shadow_blur=0,
             shadow_alpha=90,
             takes_focus=False,
         )

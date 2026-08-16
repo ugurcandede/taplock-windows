@@ -63,8 +63,11 @@ LIGHT = {
 
 # `string.Template` rather than str.format: QSS is full of braces.
 _TEMPLATE = Template("""
+/* Plain Segoe UI everywhere, not the Variable Display face. Display is the
+   optical size meant for large text: at the 10-13px this UI is mostly made of
+   it thins out and stops reading. */
 * {
-    font-family: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+    font-family: "Segoe UI", system-ui, sans-serif;
 }
 
 QWidget#card {
@@ -179,12 +182,8 @@ QComboBox QAbstractItemView {
     outline: none;
 }
 
-/* Plain Segoe UI, not the Variable Display face the rest of the sheet inherits:
-   Display is the optical size meant for large text and goes thin and hard to
-   read at caption sizes. */
 QLabel#about {
     color: $faint;
-    font-family: "Segoe UI";
     font-size: 11px;
 }
 /* Anchors are not styled here: Qt draws rich-text links from the text
