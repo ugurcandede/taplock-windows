@@ -164,6 +164,33 @@ def glow_sprite(accent: tuple[int, int, int]) -> QPixmap:
     return _to_pixmap(image.filter(ImageFilter.GaussianBlur(GLOW_BLUR * scale)))
 
 
+# ---- windows logo --------------------------------------------------------
+
+# The four panes of the Windows logo, as coordinates in an 18-unit box.
+# Drawn rather than shipped as an asset so it can take the label's colour: a
+# QLabel cannot load an <img src="data:..."> at all (Qt resolves src through the
+# document's resource loader, which has no data: handler) and a file-backed one
+# would be stuck at whatever colour it was saved in.
+_WINDOWS_BOX = 18
+_WINDOWS_PANES = (
+    ((0, 2.5), (7, 1.5), (7, 8.5), (0, 8.5)),
+    ((8, 1.5), (18, 0), (18, 8.5), (8, 8.5)),
+    ((0, 9.5), (7, 9.5), (7, 16.5), (0, 15.5)),
+    ((8, 9.5), (18, 9.5), (18, 18), (8, 16.5)),
+)
+
+
+@lru_cache(maxsize=8)
+def windows_logo(size: int, colour: tuple[int, int, int]) -> QPixmap:
+    n = size * _SUPERSAMPLE
+    scale = n / _WINDOWS_BOX
+    image = Image.new("RGBA", (n, n), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    for pane in _WINDOWS_PANES:
+        draw.polygon([(x * scale, y * scale) for x, y in pane], fill=(*colour, 255))
+    return _to_pixmap(image.resize((size, size), Image.LANCZOS))
+
+
 # ---- glass cards ---------------------------------------------------------
 
 

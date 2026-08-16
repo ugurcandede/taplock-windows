@@ -27,8 +27,10 @@ from PySide6.QtWidgets import (
 )
 
 import config
+import icon
 import startup
 from parsers import PRESET_COLORS, UNIT_SECONDS, best_unit, format_mmss, parse_color, rgb255
+from theme import DARK, LIGHT
 
 VERSION = "0.1.0"
 
@@ -42,6 +44,8 @@ SIDE_PADDING = 20
 SETTINGS_ANIM_MS = 150
 # QWIDGETSIZE_MAX; PySide does not export it.
 _UNBOUNDED = 16777215
+# Windows logo in the about line, sized to sit with 11px text.
+LOGO_PX = 12
 
 
 def _mono(pixel_size, weight=QFont.Weight.ExtraLight):
@@ -388,23 +392,41 @@ class Panel(QWidget):
 
         layout.addWidget(_divider())
 
-        # U+E8A9 is the four-pane tile glyph from the Windows icon fonts. The
-        # actual Windows logo is not in them -- Microsoft keeps brand marks out
-        # -- and this reads as it at caption size while staying monochrome, so
-        # it takes the label's colour and stays crisp where a colour emoji goes
-        # muddy. Fluent ships with Windows 11, MDL2 is the Windows 10 fallback;
-        # the codepoint is the same in both.
-        windows = "<span style=\"font-family:'Segoe Fluent Icons','Segoe MDL2 Assets';\"></span>"
-        about = QLabel(
-            f"Built with ❤ for {windows} users<br>"
-            f'<a href="https://github.com/ugurcandede">ugurcandede</a> · <a href="https://github.com/ugurcandede/taplock-windows">v{VERSION}</a>'
-        )
-        about.setObjectName("about")
-        about.setAlignment(Qt.AlignCenter)
-        about.setOpenExternalLinks(True)
-        layout.addWidget(about)
+        # The logo is a real image, so the line is laid out rather than written
+        # as rich text: QLabel cannot render an <img src="data:...">, and a
+        # file-backed one could not follow the theme.
+        credit = QHBoxLayout()
+        credit.setSpacing(5)
+        credit.addStretch()
+        credit.addWidget(self._about_label("Built with ❤ for"))
+        self._windows_logo = QLabel()
+        self._windows_logo.setFixedSize(LOGO_PX, LOGO_PX)
+        credit.addWidget(self._windows_logo)
+        credit.addWidget(self._about_label("users"))
+        credit.addStretch()
+        layout.addLayout(credit)
+
+        self._links = self._about_label("")
+        self._links.setAlignment(Qt.AlignCenter)
+        self._links.setOpenExternalLinks(True)
+        layout.addWidget(self._links)
 
         return page
+
+    def _links_html(self, accent):
+        """Anchors are styled inline because the stylesheet cannot reach them:
+        Qt draws rich-text links with the text document's own anchor styling,
+        which underlines them, and QLabel does not expose that document."""
+        style = f"color: {accent}; text-decoration: none;"
+        return (
+            f'<a href="https://github.com/ugurcandede" style="{style}">ugurcandede</a> · '
+            f'<a href="https://github.com/ugurcandede/taplock-windows" style="{style}">v{VERSION}</a>'
+        )
+
+    def _about_label(self, text):
+        label = QLabel(text)
+        label.setObjectName("about")
+        return label
 
     def _switch_row(self, layout, label):
         row = QHBoxLayout()
@@ -460,6 +482,17 @@ class Panel(QWidget):
             switch.apply_theme(dark)
         for swatch in self._swatches.buttons():
             swatch.apply_theme(dark)
+
+        palette = DARK if dark else LIGHT
+        self._links.setText(self._links_html(palette["accent"]))
+
+        # Same colour the stylesheet gives the text beside it, from the one
+        # place that defines it.
+        faint = QColor(palette["faint"])
+        ratio = self.devicePixelRatioF()  # keeps the logo crisp on a scaled display
+        logo = icon.windows_logo(round(LOGO_PX * ratio), (faint.red(), faint.green(), faint.blue()))
+        logo.setDevicePixelRatio(ratio)
+        self._windows_logo.setPixmap(logo)
 
     # ---- config <-> form -------------------------------------------------
 

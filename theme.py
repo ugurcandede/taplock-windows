@@ -187,7 +187,9 @@ QLabel#about {
     font-family: "Segoe UI";
     font-size: 11px;
 }
-QLabel#about a { color: $accent; text-decoration: none; }
+/* Anchors are not styled here: Qt draws rich-text links from the text
+   document's own anchor styling, which a QLabel does not expose, so the rule
+   would silently do nothing. panel.py sets them inline instead. */
 
 /* The tray context menu picks this up too. */
 QMenu {
