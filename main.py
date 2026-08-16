@@ -13,10 +13,11 @@ import winsound
 
 from PySide6.QtCore import QSharedMemory, Qt, QTimer
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 import config
 import icon
+import startup
 import theme
 from overlay import OverlayController
 from panel import Panel
@@ -230,6 +231,17 @@ def _wake_running_instance():
 
 def main():
     app = QApplication(sys.argv)
+
+    build = startup.unsupported_build()
+    if build is not None:
+        QMessageBox.critical(
+            None,
+            "TapLock",
+            f"TapLock needs {startup.MIN_NAME} or later.\n\n"
+            f"This machine reports Windows build {build}.",
+        )
+        sys.exit(1)
+
     app.setOrganizationName("ugurcandede")
     app.setApplicationName("TapLock")
     app.setWindowIcon(icon.app_icon())

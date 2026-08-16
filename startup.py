@@ -1,8 +1,11 @@
-"""Launch at login -- the Windows answer to macOS's SMAppService.
+"""How the app meets Windows at start: the version gate and launch at login.
 
-A value under HKCU's Run key, which is the documented per-user autostart hook
-and needs no elevation. Frozen builds register their own executable; running
-from source registers pythonw.exe so no console window appears at login.
+Launch at login is a value under HKCU's Run key, the documented per-user
+autostart hook, which needs no elevation. Frozen builds register their own
+executable; running from source registers pythonw.exe so no console window
+appears at login.
+
+Kept free of Qt so the version gate can be tested without a display.
 """
 
 import sys
@@ -11,6 +14,19 @@ from pathlib import Path
 
 _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 _VALUE = "TapLock"
+
+# Qt 6.11 supports Windows 10 version 1809 (build 17763) and later, and CPython
+# 3.14 draws the same line. Nothing below it can run this app, so it is worth
+# saying so plainly instead of failing somewhere deeper.
+MIN_BUILD = 17763
+MIN_NAME = "Windows 10, version 1809"
+
+
+def unsupported_build():
+    """This machine's build number if Windows is too old, otherwise None."""
+    build = sys.getwindowsversion().build
+    return build if build < MIN_BUILD else None
+
 
 _ENTRY = Path(__file__).resolve().with_name("main.py")
 
