@@ -473,16 +473,23 @@ _HALO_TINT = (48, 209, 88)
 # halo and the figure instead and leaves the rule still; here the figure is
 # static, which keeps the eye on the message rather than on a breathing icon.
 BAR_HEIGHT = 3
-BAR_TRAVEL = 5
-BAR_PERIOD_MS = 3000
+BAR_INSET = 16  # narrows the rule to the width macOS gives it
+BAR_PERIOD_MS = 4000
+HALO_DIAMETER = 80
+VISUAL_HEIGHT = 104
 
 
-class _AccentBar(QWidget):
-    """The green-to-teal rule at the top of the card, drifting up and down."""
+class _PostureVisual(QWidget):
+    """The halo and figure, with the accent rule sweeping down across them.
 
-    def __init__(self):
+    One widget rather than a rule stacked above a figure: the bar travels the
+    full height, so the two cannot be separate rows.
+    """
+
+    def __init__(self, colour):
         super().__init__()
-        self.setFixedHeight(BAR_HEIGHT + 2 * BAR_TRAVEL)
+        self.setFixedHeight(VISUAL_HEIGHT)
+        self._colour = colour
         self._phase = 0.0
         self._elapsed = QElapsedTimer()
         self._elapsed.start()
@@ -500,34 +507,18 @@ class _AccentBar(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        gradient = QLinearGradient(0, 0, self.width(), 0)
-        gradient.setColorAt(0.0, QColor(48, 209, 88, 153))
-        gradient.setColorAt(1.0, QColor(64, 200, 224, 153))
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(gradient)
-        painter.drawRoundedRect(
-            QRectF(0, 2 * BAR_TRAVEL * self._phase, self.width(), BAR_HEIGHT), 1.5, 1.5
-        )
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
 
+        centre_x = self.width() // 2
+        halo_bottom = VISUAL_HEIGHT - 4
+        halo_top = halo_bottom - HALO_DIAMETER
+        halo_centre_y = (halo_top + halo_bottom) // 2
 
-class _Figure(QWidget):
-    """The upright figure on its halo. Deliberately still."""
-
-    SIZE = 84
-
-    def __init__(self, colour):
-        super().__init__()
-        self.setFixedSize(self.SIZE, self.SIZE)
-        self._colour = colour
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-
-        centre = self.rect().center()
         painter.setPen(Qt.NoPen)
         painter.setBrush(QColor(*_HALO_TINT, 26))  # 0.08 alpha
-        painter.drawEllipse(QRectF(centre.x() - 40, centre.y() - 40, 80, 80))
+        painter.drawEllipse(
+            QRectF(centre_x - HALO_DIAMETER / 2, halo_top, HALO_DIAMETER, HALO_DIAMETER)
+        )
 
         ratio = self.devicePixelRatioF()
         figure = icon.posture_figure(round(POSTURE_FIGURE_PX * ratio), self._colour)
@@ -535,12 +526,23 @@ class _Figure(QWidget):
         painter.setOpacity(0.7)  # .primary.opacity(0.7) in the SwiftUI original
         painter.drawPixmap(
             QRect(
-                centre.x() - POSTURE_FIGURE_PX // 2,
-                centre.y() - POSTURE_FIGURE_PX // 2,
+                centre_x - POSTURE_FIGURE_PX // 2,
+                halo_centre_y - POSTURE_FIGURE_PX // 2,
                 POSTURE_FIGURE_PX,
                 POSTURE_FIGURE_PX,
             ),
             figure,
+        )
+
+        # Drawn last so it passes over the figure rather than behind it.
+        painter.setOpacity(1.0)
+        gradient = QLinearGradient(BAR_INSET, 0, self.width() - BAR_INSET, 0)
+        gradient.setColorAt(0.0, QColor(48, 209, 88, 153))
+        gradient.setColorAt(1.0, QColor(64, 200, 224, 153))
+        painter.setBrush(gradient)
+        y = (halo_bottom - BAR_HEIGHT) * self._phase
+        painter.drawRoundedRect(
+            QRectF(BAR_INSET, y, self.width() - 2 * BAR_INSET, BAR_HEIGHT), 1.5, 1.5
         )
 
 
@@ -571,15 +573,7 @@ class PostureReminder(_GlassOverlay):
         layout.setContentsMargins(24, 16, 24, 14)
         layout.setSpacing(0)
 
-        layout.addWidget(_AccentBar())
-        layout.addSpacing(12)
-
-        figure = _Figure(rgb)
-        row = QHBoxLayout()
-        row.addStretch()
-        row.addWidget(figure)
-        row.addStretch()
-        layout.addLayout(row)
+        layout.addWidget(_PostureVisual(rgb))
         layout.addSpacing(14)
 
         title = QLabel("Posture Check")
