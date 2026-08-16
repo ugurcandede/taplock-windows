@@ -12,6 +12,8 @@ from pathlib import Path
 _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 _VALUE = "TapLock"
 
+_ENTRY = Path(__file__).resolve().with_name("main.py")
+
 
 def _command():
     executable = Path(sys.executable)
@@ -21,7 +23,10 @@ def _command():
     # without a console; fall back to whatever we were started with.
     windowless = executable.with_name("pythonw.exe")
     launcher = windowless if windowless.exists() else executable
-    return f'"{launcher}" "{Path(sys.argv[0]).resolve()}"'
+    # The entry script comes from this module's own location, not sys.argv[0]:
+    # argv depends on how the process was launched and is "-c" under python -c,
+    # which put a path to a file called "-c" in the registry.
+    return f'"{launcher}" "{_ENTRY}"'
 
 
 def is_enabled():
