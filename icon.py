@@ -18,6 +18,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter
+from PySide6.QtCore import QBuffer
 from PySide6.QtGui import QIcon, QPixmap
 
 _ASSETS = Path(__file__).resolve().parent / "assets"
@@ -52,6 +53,15 @@ def _to_pixmap(image: Image.Image) -> QPixmap:
     pixmap = QPixmap()
     pixmap.loadFromData(buffer.getvalue(), "PNG")
     return pixmap
+
+
+def _from_pixmap(pixmap: QPixmap) -> Image.Image:
+    buffer = QBuffer()
+    buffer.open(QBuffer.ReadWrite)
+    pixmap.save(buffer, "PNG")
+    data = bytes(buffer.data())
+    buffer.close()
+    return Image.open(io.BytesIO(data)).convert("RGBA")
 
 
 def taskbar_is_light() -> bool:
@@ -152,3 +162,19 @@ def glow_sprite(accent: tuple[int, int, int]) -> QPixmap:
         fill=(*accent, 77),  # 0.30 alpha, as in the SwiftUI original
     )
     return _to_pixmap(image.filter(ImageFilter.GaussianBlur(GLOW_BLUR * scale)))
+
+
+# ---- glass cards ---------------------------------------------------------
+
+
+def blurred_backdrop(snapshot: QPixmap, blur: float, tint: tuple[int, int, int, int]) -> QPixmap:
+    """SwiftUI's `.thinMaterial`, approximated.
+
+    Qt has no live backdrop blur, so the card is backed by a still of whatever it
+    covers, blurred and washed with `tint`. The still is taken once when the
+    break opens and never refreshed -- acceptable because the desktop is not
+    moving during a break, and the alternative is re-grabbing and re-blurring the
+    screen every frame.
+    """
+    image = _from_pixmap(snapshot).filter(ImageFilter.GaussianBlur(blur))
+    return _to_pixmap(Image.alpha_composite(image, Image.new("RGBA", image.size, tint)))
