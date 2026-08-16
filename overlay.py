@@ -35,8 +35,6 @@ from PySide6.QtGui import (
     QPainterPath,
 )
 from PySide6.QtWidgets import (
-    QFrame,
-    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -50,6 +48,9 @@ from theme import DARK, LIGHT
 
 # One full pulse: SwiftUI eases 4s out and 4s back with autoreverse.
 PULSE_MS = 8000
+# The glow is large, slow and diffuse, so 30fps is plenty and a full-screen
+# translucent repaint at 60 would not be. The posture bar is small and moves
+# fast, where judder shows -- it runs at 60 (see BAR_FRAME_MS).
 FRAME_MS = 33
 GLOW_MIN_SCALE = 0.8
 GLOW_MAX_SCALE = 1.4
@@ -90,6 +91,21 @@ def _snapshot(screen, rect):
     )
 
 
+def _frame_timer(parent, interval, slot):
+    """A repeating timer that actually keeps its interval.
+
+    QTimer defaults to Qt.CoarseTimer, which Windows serves off a ~15.6ms system
+    tick -- a 16ms request lands unevenly and the motion visibly stutters even
+    though the phase itself is computed from elapsed time.
+    """
+    timer = QTimer(parent)
+    timer.setTimerType(Qt.PreciseTimer)
+    timer.setInterval(interval)
+    timer.timeout.connect(slot)
+    timer.start()
+    return timer
+
+
 def _clock_text():
     """Locale short time. macOS sets a fixed "HH:mm" but leaves the formatter's
     locale alone, so it renders as the user's convention -- match that."""
@@ -120,10 +136,7 @@ class BreathingOverlay(QWidget):
 
         self._elapsed = QElapsedTimer()
         self._elapsed.start()
-        self._frames = QTimer(self)
-        self._frames.setInterval(FRAME_MS)
-        self._frames.timeout.connect(self._frame)
-        self._frames.start()
+        self._frames = _frame_timer(self, FRAME_MS, self._frame)
 
     def prepare(self, screen):
         """Nothing to do: this theme covers the whole screen and paints its own
@@ -305,12 +318,12 @@ class _GlassOverlay(QWidget):
         self._tint = tint
         self._blur = blur
 
+        self._radius = radius
+        self._shadow_blur = shadow_blur
+        self._shadow_alpha = shadow_alpha
+        self._shadow = None
+
         self.card = _Card(radius)
-        shadow = QGraphicsDropShadowEffect(self.card)
-        shadow.setBlurRadius(shadow_blur)
-        shadow.setColor(QColor(0, 0, 0, shadow_alpha))
-        shadow.setOffset(0, 4)
-        self.card.setGraphicsEffect(shadow)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(SHADOW_MARGIN, SHADOW_MARGIN, SHADOW_MARGIN, SHADOW_MARGIN)
@@ -324,6 +337,18 @@ class _GlassOverlay(QWidget):
         self.move(self._position(screen))
         card_rect = QRect(self.pos() + QPoint(SHADOW_MARGIN, SHADOW_MARGIN), self.card.size())
         self.card.set_backdrop(icon.blurred_backdrop(_snapshot(screen, card_rect), self._blur, self._tint))
+        self._shadow = icon.card_shadow(
+            self.card.width(),
+            self.card.height(),
+            SHADOW_MARGIN,
+            self._radius,
+            self._shadow_blur,
+            self._shadow_alpha,
+        )
+
+    def paintEvent(self, event):
+        if self._shadow is not None:
+            QPainter(self).drawPixmap(0, 0, self._shadow)
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
@@ -340,7 +365,7 @@ class MinimalOverlay(_GlassOverlay):
             radius=MINIMAL_RADIUS,
             tint=_minimal_tint(accent),
             blur=MINIMAL_BLUR,
-            shadow_blur=40,
+            shadow_blur=8,
             shadow_alpha=90,
             takes_focus=takes_focus,
         )
@@ -403,7 +428,7 @@ class MiniOverlay(_GlassOverlay):
             radius=MINI_RADIUS,
             tint=_MINI_TINT,
             blur=MINI_BLUR,
-            shadow_blur=24,
+            shadow_blur=6,
             shadow_alpha=70,
             takes_focus=False,
         )
@@ -475,6 +500,7 @@ _HALO_TINT = (48, 209, 88)
 BAR_HEIGHT = 3
 BAR_INSET = 16  # narrows the rule to the width macOS gives it
 BAR_PERIOD_MS = 4000
+BAR_FRAME_MS = 16  # the bar is small and moves fast; 30fps reads as stutter
 HALO_DIAMETER = 80
 VISUAL_HEIGHT = 104
 
@@ -493,10 +519,7 @@ class _PostureVisual(QWidget):
         self._phase = 0.0
         self._elapsed = QElapsedTimer()
         self._elapsed.start()
-        timer = QTimer(self)
-        timer.setInterval(FRAME_MS)
-        timer.timeout.connect(self._frame)
-        timer.start()
+        self._timer = _frame_timer(self, BAR_FRAME_MS, self._frame)
 
     def _frame(self):
         # Cosine so the turn at each end eases instead of snapping.
@@ -562,7 +585,7 @@ class PostureReminder(_GlassOverlay):
             radius=POSTURE_RADIUS,
             tint=(28, 28, 30, 225) if dark else (250, 250, 252, 235),
             blur=POSTURE_BLUR,
-            shadow_blur=40,
+            shadow_blur=8,
             shadow_alpha=90,
             takes_focus=False,
         )
