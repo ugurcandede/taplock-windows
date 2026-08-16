@@ -25,6 +25,7 @@ _ASSETS = Path(__file__).resolve().parent / "assets"
 _ICO = _ASSETS / "icon.ico"
 _LEAF_IDLE = _ASSETS / "leaf.png"
 _LEAF_ACTIVE = _ASSETS / "leaf-filled.png"
+_POSTURE = _ASSETS / "posture.png"
 
 # Windows picks a tray render by DPI. Each size is rendered from the source art
 # rather than scaled off one bitmap, so the thin outline resamples cleanly.
@@ -79,7 +80,7 @@ def taskbar_is_light() -> bool:
 
 
 @lru_cache(maxsize=2)
-def _leaf_alpha(path: Path) -> Image.Image:
+def _glyph_alpha(path: Path) -> Image.Image:
     # The source glyphs are black on transparent, so the alpha channel is
     # already the mask, antialiasing included.
     return Image.open(path).convert("RGBA").getchannel("A")
@@ -107,7 +108,7 @@ def _tray_pixmap(size: int, active: bool, colour: tuple[int, int, int]) -> QPixm
     # solved. Downsampling from the supersampled mask keeps the thin stroke
     # readable on its own.
     n = size * _SUPERSAMPLE
-    mask = _leaf_alpha(_LEAF_ACTIVE if active else _LEAF_IDLE).resize((n, n), Image.LANCZOS)
+    mask = _glyph_alpha(_LEAF_ACTIVE if active else _LEAF_IDLE).resize((n, n), Image.LANCZOS)
     mask = _fit(mask, n)
     image = Image.new("RGBA", (n, n), (0, 0, 0, 0))
     image.paste(Image.new("RGBA", (n, n), (*colour, 255)), (0, 0), mask)
@@ -162,6 +163,20 @@ def glow_sprite(accent: tuple[int, int, int]) -> QPixmap:
         fill=(*accent, 77),  # 0.30 alpha, as in the SwiftUI original
     )
     return _to_pixmap(image.filter(ImageFilter.GaussianBlur(GLOW_BLUR * scale)))
+
+
+@lru_cache(maxsize=16)
+def posture_figure(size: int, colour: tuple[int, int, int]) -> QPixmap:
+    """The upright figure on the posture reminder, tinted to the card's text.
+
+    Same treatment as the tray leaf: an alpha mask from the source art, cropped
+    to its ink and resampled once.
+    """
+    n = size * _SUPERSAMPLE
+    mask = _fit(_glyph_alpha(_POSTURE).resize((n, n), Image.LANCZOS), n)
+    image = Image.new("RGBA", (n, n), (0, 0, 0, 0))
+    image.paste(Image.new("RGBA", (n, n), (*colour, 255)), (0, 0), mask)
+    return _to_pixmap(image.resize((size, size), Image.LANCZOS))
 
 
 # ---- windows logo --------------------------------------------------------

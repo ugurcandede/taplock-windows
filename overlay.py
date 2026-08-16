@@ -110,16 +110,16 @@ class BreathingOverlay(QWidget):
         self.setGeometry(screen.geometry())
         self._build()
 
-    def prepare(self, screen):
-        """Nothing to do: this theme covers the whole screen and paints its own
-        wash, so there is no backdrop to capture."""
-
         self._elapsed = QElapsedTimer()
         self._elapsed.start()
         self._frames = QTimer(self)
         self._frames.setInterval(FRAME_MS)
         self._frames.timeout.connect(self._frame)
         self._frames.start()
+
+    def prepare(self, screen):
+        """Nothing to do: this theme covers the whole screen and paints its own
+        wash, so there is no backdrop to capture."""
 
     def _build(self):
         layout = QVBoxLayout(self)
@@ -461,10 +461,7 @@ POSTURE_FADE_MS = 300
 POSTURE_RISE = 8
 
 # SF Symbols' figure.stand has no equivalent here; E726 is the closest upright
-# figure in the Windows icon fonts. Fluent is Windows 11, MDL2 the Windows 10
-# fallback, and the codepoint is the same in both.
-_FIGURE = ""
-_FIGURE_FONTS = ["Segoe Fluent Icons", "Segoe MDL2 Assets"]
+POSTURE_FIGURE_PX = 38
 _PULSE_TINT = (48, 209, 88)
 
 
@@ -502,12 +499,14 @@ class _Figure(QWidget):
             QRectF(centre.x() - diameter / 2, centre.y() - diameter / 2, diameter, diameter)
         )
 
-        glyph = QFont()
-        glyph.setFamilies(_FIGURE_FONTS)
-        glyph.setPixelSize(round(36 * (0.96 + 0.08 * self._pulse)))
-        painter.setFont(glyph)
-        painter.setPen(QColor(*self._colour, 180))
-        painter.drawText(self.rect(), Qt.AlignCenter, _FIGURE)
+        ratio = self.devicePixelRatioF()
+        side = round(POSTURE_FIGURE_PX * (0.96 + 0.08 * self._pulse))
+        figure = icon.posture_figure(round(side * ratio), self._colour)
+        figure.setDevicePixelRatio(ratio)
+        painter.setOpacity(0.7)  # .primary.opacity(0.7) in the SwiftUI original
+        painter.drawPixmap(
+            QRect(centre.x() - side // 2, centre.y() - side // 2, side, side), figure
+        )
 
 
 class PostureReminder(_GlassOverlay):

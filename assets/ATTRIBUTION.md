@@ -1,11 +1,15 @@
 # Third-party assets
 
-## leaf.png, leaf-filled.png
+## leaf.png, leaf-filled.png, posture.png
 
-Tray icons: the leaf in Icons8's **Apple SF** collection, outline (`SF Regular`)
-for idle and solid (`SF Ultralight Filled`) for a running session.
+From Icons8's **Apple SF** collection:
 
-- Source: <https://icons8.com/icon/1gb16bwqHLeW/leaf>
+- `leaf.png` — tray icon when idle (`SF Regular`)
+- `leaf-filled.png` — tray icon while a session runs (`SF Ultralight Filled`)
+- `posture.png` — the upright figure on the posture reminder (`SF Regular`,
+  "standing man"), standing in for SF Symbols' `figure.stand`
+
+- Source: <https://icons8.com/icon/1gb16bwqHLeW/leaf> and the same collection
 - Author: Icons8
 
 **Licence.** Icons8's free tier is governed by their Universal Multimedia Licence
