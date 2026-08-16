@@ -106,7 +106,21 @@ QLineEdit#duration {
     selection-color: #FFFFFF;
 }
 
-/* s / m / h segmented picker. */
+/* s / m / h segmented picker. No checked background here: the selection is a
+   pill painted behind the buttons so it can slide between them. */
+QPushButton#segment {
+    background: transparent;
+    border: none;
+    color: $faint;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 0;
+    min-width: 26px;
+}
+QPushButton#segment:hover { color: $text; }
+QPushButton#segment:checked { color: $accent; }
+
+/* Transparency presets: same look, but they do not slide. */
 QPushButton#unit {
     background: transparent;
     border: none;

@@ -10,7 +10,7 @@ settings) and the running view (countdown / skip / stop), swapped from the
 session's `state_changed`.
 """
 
-from PySide6.QtCore import QEasingCurve, QEvent, QRect, Qt, QVariantAnimation, Signal
+from PySide6.QtCore import QEasingCurve, QEvent, QRect, QRectF, Qt, QVariantAnimation, Signal
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QIntValidator, QPainter
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -52,6 +52,10 @@ ANCHOR_GAP = 8
 SIDE_PADDING = 20
 # Matches the 0.15s easeInOut the macOS popover animates its sections with.
 SECTION_ANIM_MS = 150
+# The s / m / h pill slides a little quicker; it travels a much shorter way.
+SEGMENT_ANIM_MS = 140
+# Long enough for the count to read as a count rather than a flicker.
+COUNT_ANIM_MS = 220
 # QWIDGETSIZE_MAX; PySide does not export it.
 _UNBOUNDED = 16777215
 # Windows logo in the about line, sized to sit with 11px text.
@@ -227,11 +231,47 @@ class _Swatch(QPushButton):
         )
 
 
+class _CountingEdit(QLineEdit):
+    """A number field that counts to its new value rather than swapping to it.
+
+    Only the preset buttons drive this. Typing goes straight in, and a keystroke
+    cancels a running count so the field never fights the person using it.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._anim = QVariantAnimation(self)
+        self._anim.setDuration(COUNT_ANIM_MS)
+        self._anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._anim.valueChanged.connect(lambda value: self.setText(str(int(value))))
+        self.textEdited.connect(self._anim.stop)
+
+    def count_to(self, value):
+        self._anim.stop()
+        try:
+            start = int(self.text())
+        except ValueError:
+            self.setText(str(value))
+            return
+        if start == value:
+            return
+        self._anim.setStartValue(start)
+        self._anim.setEndValue(value)
+        self._anim.start()
+
+
 class _UnitPicker(QWidget):
-    """Captioned s / m / h selector."""
+    """Captioned s / m / h selector.
+
+    The selection is a pill painted behind the buttons rather than a `:checked`
+    background on each, so it can slide from one to the next.
+    """
 
     def __init__(self, caption):
         super().__init__()
+        self._slide_x = None  # until the first move, follow the checked button
+        self.apply_theme(True)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
@@ -242,25 +282,75 @@ class _UnitPicker(QWidget):
 
         row = QHBoxLayout()
         row.setSpacing(2)
-        group = QButtonGroup(self)
+        self._group = QButtonGroup(self)
         self._buttons = {}
         for unit in ("s", "m", "h"):
             button = QPushButton(unit)
-            button.setObjectName("unit")
+            button.setObjectName("segment")
             button.setCheckable(True)
             button.setFocusPolicy(Qt.NoFocus)
             button.setCursor(Qt.PointingHandCursor)
-            group.addButton(button)
+            self._group.addButton(button)
             row.addWidget(button)
             self._buttons[unit] = button
         layout.addLayout(row)
+
+        self._anim = QVariantAnimation(self)
+        self._anim.setDuration(SEGMENT_ANIM_MS)
+        self._anim.setEasingCurve(QEasingCurve.InOutQuad)
+        self._anim.valueChanged.connect(self._on_slide)
+        self._group.buttonClicked.connect(lambda _: self._slide_to_checked())
+
         self.set_unit("m")
+
+    def apply_theme(self, dark):
+        self._pill = QColor(10, 132, 255, 41) if dark else QColor(0, 103, 192, 36)
+        self.update()
 
     def unit(self):
         return next(u for u, b in self._buttons.items() if b.isChecked())
 
-    def set_unit(self, unit):
+    def set_unit(self, unit, animate=False):
+        """Jumps by default -- loading a config happens before the panel is even
+        on screen. A preset button is different: the user is looking straight at
+        the picker, so that path asks for the slide.
+        """
+        if animate and unit != self._selected:
+            self._buttons[unit].setChecked(True)
+            self._slide_to_checked()
+            return
         self._buttons[unit].setChecked(True)
+        self._selected = unit
+        self._slide_x = None
+        self.update()
+
+    def _slide_to_checked(self):
+        # The button is already checked by the time this runs, so the departure
+        # point comes from the unit we were on -- or from wherever a previous
+        # slide had got to, if one is still in flight.
+        start = self._slide_x
+        if start is None:
+            start = float(self._buttons[self._selected].x())
+        self._selected = self.unit()
+
+        self._anim.stop()
+        self._anim.setStartValue(float(start))
+        self._anim.setEndValue(float(self._buttons[self._selected].x()))
+        self._anim.start()
+
+    def _on_slide(self, x):
+        self._slide_x = x
+        self.update()
+
+    def paintEvent(self, event):
+        checked = self._buttons[self.unit()]
+        box = checked.geometry()
+        x = self._slide_x if self._slide_x is not None else box.x()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(self._pill)
+        painter.drawRoundedRect(QRectF(x, box.y(), box.width(), box.height()), 5, 5)
 
 
 class Panel(QWidget):
@@ -443,7 +533,7 @@ class Panel(QWidget):
         self._skipped_row.setVisible(bool(summary.skipped_early))
 
     def _duration_edit(self, width, alignment):
-        edit = QLineEdit()
+        edit = _CountingEdit()
         edit.setObjectName("duration")
         edit.setFont(_mono(44))
         edit.setFixedWidth(width)
@@ -621,6 +711,8 @@ class Panel(QWidget):
             switch.apply_theme(dark)
         for swatch in self._swatches.buttons():
             swatch.apply_theme(dark)
+        for picker in (self._interval_unit, self._break_unit):
+            picker.apply_theme(dark)
 
         palette = DARK if dark else LIGHT
         self._links.setText(self._links_html(palette["accent"]))
@@ -673,10 +765,10 @@ class Panel(QWidget):
         config.save(self._config)
 
     def _apply_preset(self, interval_minutes, break_minutes):
-        self._interval_edit.setText(str(interval_minutes))
-        self._interval_unit.set_unit("m")
-        self._break_edit.setText(str(break_minutes))
-        self._break_unit.set_unit("m")
+        self._interval_edit.count_to(interval_minutes)
+        self._interval_unit.set_unit("m", animate=True)
+        self._break_edit.count_to(break_minutes)
+        self._break_unit.set_unit("m", animate=True)
         self._set_error(None)
 
     def _seconds(self, edit, picker):
