@@ -6,6 +6,9 @@ on:
     paths-ignore:
       - '**.md'
       - 'screenshots/**'
+  # Lets a release be cut from the Actions tab without pushing anything, and
+  # gives a way to tell "the trigger did not match" apart from "Actions is off".
+  workflow_dispatch:
 
 jobs:
   build-and-release:
