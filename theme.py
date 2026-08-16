@@ -21,9 +21,11 @@ QWidget#card {
     border-radius: 12px;
 }
 
+/* No font-size here on purpose: a size in this rule outranks setFont() on the
+   widget, which is how the big monospaced countdown and slash are set. Roles
+   that need a specific size declare it below. */
 QLabel {
     color: #F2F2F7;
-    font-size: 13px;
     background: transparent;
 }
 QLabel#secondary { color: #8E8E93; font-size: 11px; }
@@ -59,6 +61,54 @@ QPushButton#plain {
     padding: 8px 0;
 }
 QPushButton#plain:hover { color: #F2F2F7; }
+
+QLabel#error { color: #FF453A; font-size: 10px; }
+
+/* Interval / break entry. Point sizes are set in code -- QSS cannot express the
+   monospaced ultralight face the macOS popover uses. */
+QLineEdit#duration {
+    background: transparent;
+    border: none;
+    color: #F2F2F7;
+    selection-background-color: #0A84FF;
+    selection-color: #FFFFFF;
+}
+QLabel#slash { color: #48484A; }
+
+/* s / m / h segmented picker. */
+QPushButton#unit {
+    background: transparent;
+    border: none;
+    border-radius: 5px;
+    color: #636366;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 0;
+    min-width: 26px;
+}
+QPushButton#unit:hover { color: #F2F2F7; }
+QPushButton#unit:checked { background-color: rgba(10, 132, 255, 0.16); color: #0A84FF; }
+
+QPushButton#preset {
+    background: transparent;
+    border: none;
+    color: #8E8E93;
+    font-size: 12px;
+    padding: 6px 0;
+}
+QPushButton#preset:hover { color: #F2F2F7; }
+
+QPushButton#danger, QPushButton#warning {
+    border: none;
+    border-radius: 8px;
+    padding: 10px 16px;
+    font-size: 12px;
+    font-weight: 600;
+}
+QPushButton#danger { background-color: rgba(255, 69, 58, 0.12); color: #FF453A; }
+QPushButton#danger:hover { background-color: rgba(255, 69, 58, 0.20); }
+QPushButton#warning { background-color: rgba(255, 159, 10, 0.12); color: #FF9F0A; }
+QPushButton#warning:hover { background-color: rgba(255, 159, 10, 0.20); }
 
 QMenu {
     background-color: #1C1C1E;
