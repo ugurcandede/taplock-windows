@@ -81,13 +81,17 @@ class TrayApp:
         self._session.break_started.connect(self._open_overlay)
         self._session.break_ended.connect(self._overlays.close)
         self._session.play_sound.connect(_play)
+        self._session.posture_due.connect(self._overlays.open_posture)
+        self._session.posture_dismissed.connect(self._overlays.close_posture)
+        self._overlays.posture_dismissed.connect(self._on_posture_dismissed)
 
         # Previews reuse the break overlays; settings are only reachable while
         # idle, so there is never a real break to collide with.
         self._preview_timer = QTimer(app)
         self._preview_timer.setSingleShot(True)
-        self._preview_timer.timeout.connect(self._overlays.close)
+        self._preview_timer.timeout.connect(self._end_preview)
         self._panel.preview_theme.connect(self._show_preview)
+        self._panel.preview_posture.connect(self._show_posture_preview)
 
         self._timer = QTimer(app)
         self._timer.setInterval(TICK_MS)
@@ -115,6 +119,16 @@ class TrayApp:
         self._overlays.set_remaining(self._config.break_duration)
         self._preview_timer.start(PREVIEW_MS)
 
+    def _end_preview(self):
+        self._overlays.close()
+        self._overlays.close_posture()
+
+    def _show_posture_preview(self):
+        if self._session.running:
+            return
+        self._overlays.open_posture()
+        self._preview_timer.start(PREVIEW_MS)
+
     def _on_skip(self):
         # The same Skip button dismisses a preview and skips a real break.
         if self._preview_timer.isActive():
@@ -122,6 +136,13 @@ class TrayApp:
             self._overlays.close()
         else:
             self._session.skip_break()
+
+    def _on_posture_dismissed(self):
+        # "Got it" ends a preview and a real reminder alike; the session call is
+        # a no-op when there is no session running.
+        self._preview_timer.stop()
+        self._overlays.close_posture()
+        self._session.dismiss_posture()
 
     # ---- tray ------------------------------------------------------------
 

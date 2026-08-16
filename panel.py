@@ -185,6 +185,7 @@ class _UnitPicker(QWidget):
 
 class Panel(QWidget):
     preview_theme = Signal()
+    preview_posture = Signal()
 
     def __init__(self, relax_config, session, on_quit):
         super().__init__(None, Qt.FramelessWindowHint | Qt.Tool | Qt.NoDropShadowWindowHint)
@@ -388,6 +389,9 @@ class Panel(QWidget):
 
         self._launch_switch = self._switch_row(layout, "launch at login")
         self._silent_switch = self._switch_row(layout, "silent")
+        self._posture_switch = self._switch_row(
+            layout, "posture reminder", preview=self.preview_posture
+        )
 
         layout.addWidget(_divider())
 
@@ -428,10 +432,18 @@ class Panel(QWidget):
         label.setObjectName("about")
         return label
 
-    def _switch_row(self, layout, label):
+    def _switch_row(self, layout, label, preview=None):
         row = QHBoxLayout()
         row.addWidget(_caption(label))
         row.addStretch()
+        if preview is not None:
+            button = QPushButton("preview")
+            button.setObjectName("preset")
+            button.setFocusPolicy(Qt.NoFocus)
+            button.setCursor(Qt.PointingHandCursor)
+            button.setToolTip("Show the reminder for 5 seconds")
+            button.clicked.connect(preview)
+            row.addWidget(button)
         switch = _Switch()
         switch.toggled.connect(self._save_settings)
         row.addWidget(switch)
@@ -478,7 +490,7 @@ class Panel(QWidget):
         """The stylesheet handles colours; these three are painted in code, and
         the values that read well on a dark card are wrong on a light one."""
         self._shadow.setColor(QColor(0, 0, 0, 150 if dark else 55))
-        for switch in (self._launch_switch, self._silent_switch):
+        for switch in (self._launch_switch, self._silent_switch, self._posture_switch):
             switch.apply_theme(dark)
         for swatch in self._swatches.buttons():
             swatch.apply_theme(dark)
@@ -511,6 +523,7 @@ class Panel(QWidget):
         nearest = min(self._alphas.buttons(), key=lambda b: abs(b.opacity - self._config.opacity))
         nearest.setChecked(True)
         self._silent_switch.setChecked(self._config.silent)
+        self._posture_switch.setChecked(self._config.show_posture_reminder)
         self._launch_switch.setChecked(startup.is_enabled())
         self._loading = False
 
@@ -527,6 +540,7 @@ class Panel(QWidget):
         if alpha is not None:
             self._config.opacity = alpha.opacity
         self._config.silent = self._silent_switch.isChecked()
+        self._config.show_posture_reminder = self._posture_switch.isChecked()
         self._config.launch_at_login = self._launch_switch.isChecked()
         startup.set_enabled(self._config.launch_at_login)
         config.save(self._config)

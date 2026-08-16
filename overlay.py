@@ -12,6 +12,7 @@ activating so they cannot steal the caret.
 import math
 
 from PySide6.QtCore import (
+    QEasingCurve,
     QElapsedTimer,
     QLocale,
     QObject,
@@ -21,10 +22,12 @@ from PySide6.QtCore import (
     QTime,
     QTimer,
     Qt,
+    QVariantAnimation,
     Signal,
 )
 from PySide6.QtGui import QColor, QCursor, QFont, QGuiApplication, QPainter, QPainterPath
 from PySide6.QtWidgets import (
+    QFrame,
     QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
@@ -35,6 +38,7 @@ from PySide6.QtWidgets import (
 
 import icon
 from parsers import format_countdown, luminance, parse_color, rgb255
+from theme import DARK, LIGHT
 
 # One full pulse: SwiftUI eases 4s out and 4s back with autoreverse.
 PULSE_MS = 8000
@@ -446,18 +450,200 @@ _THEMES = {
 }
 
 
+# ---- posture reminder ----------------------------------------------------
+
+POSTURE_WIDTH = 240
+POSTURE_TOP_GAP = 80
+POSTURE_RADIUS = 12
+POSTURE_BLUR = 20
+POSTURE_PULSE_MS = 6000  # 3s out and back, as the SwiftUI animation reads
+POSTURE_FADE_MS = 300
+POSTURE_RISE = 8
+
+# SF Symbols' figure.stand has no equivalent here; E726 is the closest upright
+# figure in the Windows icon fonts. Fluent is Windows 11, MDL2 the Windows 10
+# fallback, and the codepoint is the same in both.
+_FIGURE = ""
+_FIGURE_FONTS = ["Segoe Fluent Icons", "Segoe MDL2 Assets"]
+_PULSE_TINT = (48, 209, 88)
+
+
+class _Figure(QWidget):
+    """The icon with the slow halo behind it."""
+
+    SIZE = 84
+
+    def __init__(self, colour):
+        super().__init__()
+        self.setFixedSize(self.SIZE, self.SIZE)
+        self._colour = colour
+        self._pulse = 0.0
+        self._elapsed = QElapsedTimer()
+        self._elapsed.start()
+        timer = QTimer(self)
+        timer.setInterval(FRAME_MS)
+        timer.timeout.connect(self._frame)
+        timer.start()
+
+    def _frame(self):
+        phase = (self._elapsed.elapsed() % POSTURE_PULSE_MS) / POSTURE_PULSE_MS
+        self._pulse = (1 - math.cos(2 * math.pi * phase)) / 2
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        diameter = 80 * (0.9 + 0.25 * self._pulse)
+        centre = self.rect().center()
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(*_PULSE_TINT, 26))  # 0.08 alpha
+        painter.drawEllipse(
+            QRectF(centre.x() - diameter / 2, centre.y() - diameter / 2, diameter, diameter)
+        )
+
+        glyph = QFont()
+        glyph.setFamilies(_FIGURE_FONTS)
+        glyph.setPixelSize(round(36 * (0.96 + 0.08 * self._pulse)))
+        painter.setFont(glyph)
+        painter.setPen(QColor(*self._colour, 180))
+        painter.drawText(self.rect(), Qt.AlignCenter, _FIGURE)
+
+
+class PostureReminder(_GlassOverlay):
+    """Mid-interval nudge. Never takes focus -- it appears while the user is
+    working, and a card that grabbed the caret mid-sentence would be worse than
+    the slouch it is trying to fix. That also means no Esc: the button is the
+    way out, so the macOS "esc to dismiss" hint is dropped rather than lying.
+    """
+
+    dismissed = Signal()
+
+    def __init__(self, dark):
+        palette = DARK if dark else LIGHT
+        text = QColor(palette["text"])
+        super().__init__(
+            radius=POSTURE_RADIUS,
+            tint=(28, 28, 30, 225) if dark else (250, 250, 252, 235),
+            blur=POSTURE_BLUR,
+            shadow_blur=40,
+            shadow_alpha=90,
+            takes_focus=False,
+        )
+        self.card.setFixedWidth(POSTURE_WIDTH)
+        rgb = (text.red(), text.green(), text.blue())
+
+        layout = QVBoxLayout(self.card)
+        layout.setContentsMargins(24, 16, 24, 14)
+        layout.setSpacing(0)
+
+        accent = QFrame()
+        accent.setFixedHeight(3)
+        accent.setStyleSheet(
+            "background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+            " stop:0 rgba(48, 209, 88, 0.6), stop:1 rgba(64, 200, 224, 0.6));"
+            " border-radius: 2px;"
+        )
+        layout.addWidget(accent)
+        layout.addSpacing(18)
+
+        figure = _Figure(rgb)
+        row = QHBoxLayout()
+        row.addStretch()
+        row.addWidget(figure)
+        row.addStretch()
+        layout.addLayout(row)
+        layout.addSpacing(14)
+
+        title = QLabel("Posture Check")
+        title.setFont(_font(15, QFont.Weight.DemiBold))
+        title.setStyleSheet(_rgba(rgb, 1.0))
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+
+        body = QLabel("Straighten your back & relax your shoulders")
+        body.setFont(_font(12, QFont.Weight.Normal))
+        body.setStyleSheet(_rgba(rgb, 0.6))
+        body.setAlignment(Qt.AlignCenter)
+        body.setWordWrap(True)
+        layout.addWidget(body)
+        layout.addSpacing(18)
+
+        got_it = QPushButton("Got it")
+        got_it.setFont(_font(12, QFont.Weight.Medium))
+        got_it.setCursor(Qt.PointingHandCursor)
+        got_it.setFocusPolicy(Qt.NoFocus)
+        got_it.setFixedHeight(28)
+        r, g, b = rgb
+        got_it.setStyleSheet(
+            f"QPushButton {{ background: rgba({r}, {g}, {b}, 0.08); border: none;"
+            f" border-radius: 6px; color: rgba({r}, {g}, {b}, 0.75); }}"
+            f"QPushButton:hover {{ background: rgba({r}, {g}, {b}, 0.14); }}"
+        )
+        got_it.clicked.connect(self.dismissed)
+        layout.addWidget(got_it)
+
+        self._fade = QVariantAnimation(self)
+        self._fade.setDuration(POSTURE_FADE_MS)
+        self._fade.setEasingCurve(QEasingCurve.OutCubic)
+        self._fade.setStartValue(0.0)
+        self._fade.setEndValue(1.0)
+        self._fade.valueChanged.connect(self._appear)
+
+    def _position(self, screen):
+        area = screen.availableGeometry()
+        return QPoint(
+            area.center().x() - self.width() // 2,
+            area.top() + POSTURE_TOP_GAP - SHADOW_MARGIN,
+        )
+
+    def prepare(self, screen):
+        super().prepare(screen)
+        self._resting = self.pos()
+        self.setWindowOpacity(0.0)
+        self._fade.start()
+
+    def _appear(self, value):
+        # Fades in and settles down the last few pixels, as the macOS card does.
+        self.setWindowOpacity(value)
+        self.move(self._resting.x(), round(self._resting.y() - POSTURE_RISE * (1 - value)))
+
+    def set_remaining(self, seconds):
+        """Not a countdown card; the session dismisses it on its own timer."""
+
+
 class OverlayController(QObject):
     """Opens and closes the windows for one break."""
 
     skipped = Signal()
+    posture_dismissed = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._windows = []
+        self._posture = None
 
     @property
     def visible(self):
         return bool(self._windows)
+
+    # ---- posture reminder --------------------------------------------------
+
+    def open_posture(self):
+        self.close_posture()
+        screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
+        dark = QGuiApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark
+        window = PostureReminder(dark)
+        window.dismissed.connect(self.posture_dismissed)
+        window.prepare(screen)
+        window.show()
+        window.raise_()
+        self._posture = window
+
+    def close_posture(self):
+        if self._posture is not None:
+            self._posture.close()
+            self._posture = None
 
     def open(self, config):
         self.close()
