@@ -25,7 +25,15 @@ from PySide6.QtCore import (
     QVariantAnimation,
     Signal,
 )
-from PySide6.QtGui import QColor, QCursor, QFont, QGuiApplication, QPainter, QPainterPath
+from PySide6.QtGui import (
+    QColor,
+    QCursor,
+    QFont,
+    QGuiApplication,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+)
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
@@ -456,25 +464,26 @@ POSTURE_WIDTH = 240
 POSTURE_TOP_GAP = 80
 POSTURE_RADIUS = 12
 POSTURE_BLUR = 20
-POSTURE_PULSE_MS = 6000  # 3s out and back, as the SwiftUI animation reads
 POSTURE_FADE_MS = 300
 POSTURE_RISE = 8
-
-# SF Symbols' figure.stand has no equivalent here; E726 is the closest upright
 POSTURE_FIGURE_PX = 38
-_PULSE_TINT = (48, 209, 88)
+_HALO_TINT = (48, 209, 88)
+
+# The accent rule is the only thing that moves on this card. macOS animates the
+# halo and the figure instead and leaves the rule still; here the figure is
+# static, which keeps the eye on the message rather than on a breathing icon.
+BAR_HEIGHT = 3
+BAR_TRAVEL = 5
+BAR_PERIOD_MS = 3000
 
 
-class _Figure(QWidget):
-    """The icon with the slow halo behind it."""
+class _AccentBar(QWidget):
+    """The green-to-teal rule at the top of the card, drifting up and down."""
 
-    SIZE = 84
-
-    def __init__(self, colour):
+    def __init__(self):
         super().__init__()
-        self.setFixedSize(self.SIZE, self.SIZE)
-        self._colour = colour
-        self._pulse = 0.0
+        self.setFixedHeight(BAR_HEIGHT + 2 * BAR_TRAVEL)
+        self._phase = 0.0
         self._elapsed = QElapsedTimer()
         self._elapsed.start()
         timer = QTimer(self)
@@ -483,29 +492,55 @@ class _Figure(QWidget):
         timer.start()
 
     def _frame(self):
-        phase = (self._elapsed.elapsed() % POSTURE_PULSE_MS) / POSTURE_PULSE_MS
-        self._pulse = (1 - math.cos(2 * math.pi * phase)) / 2
+        # Cosine so the turn at each end eases instead of snapping.
+        step = (self._elapsed.elapsed() % BAR_PERIOD_MS) / BAR_PERIOD_MS
+        self._phase = (1 - math.cos(2 * math.pi * step)) / 2
         self.update()
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-
-        diameter = 80 * (0.9 + 0.25 * self._pulse)
-        centre = self.rect().center()
+        gradient = QLinearGradient(0, 0, self.width(), 0)
+        gradient.setColorAt(0.0, QColor(48, 209, 88, 153))
+        gradient.setColorAt(1.0, QColor(64, 200, 224, 153))
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(*_PULSE_TINT, 26))  # 0.08 alpha
-        painter.drawEllipse(
-            QRectF(centre.x() - diameter / 2, centre.y() - diameter / 2, diameter, diameter)
+        painter.setBrush(gradient)
+        painter.drawRoundedRect(
+            QRectF(0, 2 * BAR_TRAVEL * self._phase, self.width(), BAR_HEIGHT), 1.5, 1.5
         )
 
+
+class _Figure(QWidget):
+    """The upright figure on its halo. Deliberately still."""
+
+    SIZE = 84
+
+    def __init__(self, colour):
+        super().__init__()
+        self.setFixedSize(self.SIZE, self.SIZE)
+        self._colour = colour
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        centre = self.rect().center()
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(*_HALO_TINT, 26))  # 0.08 alpha
+        painter.drawEllipse(QRectF(centre.x() - 40, centre.y() - 40, 80, 80))
+
         ratio = self.devicePixelRatioF()
-        side = round(POSTURE_FIGURE_PX * (0.96 + 0.08 * self._pulse))
-        figure = icon.posture_figure(round(side * ratio), self._colour)
+        figure = icon.posture_figure(round(POSTURE_FIGURE_PX * ratio), self._colour)
         figure.setDevicePixelRatio(ratio)
         painter.setOpacity(0.7)  # .primary.opacity(0.7) in the SwiftUI original
         painter.drawPixmap(
-            QRect(centre.x() - side // 2, centre.y() - side // 2, side, side), figure
+            QRect(
+                centre.x() - POSTURE_FIGURE_PX // 2,
+                centre.y() - POSTURE_FIGURE_PX // 2,
+                POSTURE_FIGURE_PX,
+                POSTURE_FIGURE_PX,
+            ),
+            figure,
         )
 
 
@@ -536,15 +571,8 @@ class PostureReminder(_GlassOverlay):
         layout.setContentsMargins(24, 16, 24, 14)
         layout.setSpacing(0)
 
-        accent = QFrame()
-        accent.setFixedHeight(3)
-        accent.setStyleSheet(
-            "background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
-            " stop:0 rgba(48, 209, 88, 0.6), stop:1 rgba(64, 200, 224, 0.6));"
-            " border-radius: 2px;"
-        )
-        layout.addWidget(accent)
-        layout.addSpacing(18)
+        layout.addWidget(_AccentBar())
+        layout.addSpacing(12)
 
         figure = _Figure(rgb)
         row = QHBoxLayout()
