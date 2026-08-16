@@ -114,11 +114,10 @@ class Panel(QWidget):
         self._card = card
         card.setObjectName("card")
         card.setFixedWidth(CARD_WIDTH)
-        shadow = QGraphicsDropShadowEffect(card)
-        shadow.setBlurRadius(32)
-        shadow.setColor(QColor(0, 0, 0, 160))
-        shadow.setOffset(0, 6)
-        card.setGraphicsEffect(shadow)
+        self._shadow = QGraphicsDropShadowEffect(card)
+        self._shadow.setBlurRadius(32)
+        self._shadow.setOffset(0, 6)
+        card.setGraphicsEffect(self._shadow)
         outer.addWidget(card)
 
         body = QVBoxLayout(card)
@@ -239,6 +238,11 @@ class Panel(QWidget):
         layout.addWidget(stop)
 
         return page
+
+    def apply_theme(self, dark):
+        """The stylesheet handles colours; the shadow is set in code, and the
+        heavy one that reads well on a dark card is a smudge on a light one."""
+        self._shadow.setColor(QColor(0, 0, 0, 150 if dark else 55))
 
     # ---- config <-> form -------------------------------------------------
 

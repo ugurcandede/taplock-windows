@@ -10,17 +10,17 @@ session, which keeps the state machine testable without Qt.
 
 import sys
 
-from PySide6.QtCore import QSharedMemory, QTimer
+from PySide6.QtCore import QSharedMemory, Qt, QTimer
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 import config
 import icon
+import theme
 from overlay import OverlayController
 from panel import Panel
 from parsers import format_mmss
 from session import RelaxSession
-from theme import STYLESHEET
 
 # Shared-memory segment whose existence means "an instance is already running".
 # Creating it is atomic, so two launches milliseconds apart cannot both win.
@@ -50,8 +50,6 @@ class TrayApp:
         menu.addAction("Quit", self.quit)
         self._tray.setContextMenu(menu)
         self._tray.activated.connect(self._on_activated)
-        self._refresh_tray()
-        self._tray.show()
 
         self._overlays = OverlayController(app)
         self._overlays.skipped.connect(self._session.skip_break)
@@ -64,7 +62,9 @@ class TrayApp:
         self._timer.start()
 
         self._session.state_changed.connect(self._refresh_tray)
-        app.styleHints().colorSchemeChanged.connect(self._theme_changed)
+        app.styleHints().colorSchemeChanged.connect(self.apply_theme)
+        self.apply_theme()  # also paints the first tray icon
+        self._tray.show()
 
     def _tick(self):
         self._session.tick()
@@ -77,10 +77,18 @@ class TrayApp:
 
     # ---- tray ------------------------------------------------------------
 
-    def _theme_changed(self):
-        # Qt reports the app theme, we render against the taskbar theme; they are
-        # separate Windows settings but are normally switched together, so this
-        # is the right moment to re-render the glyph in the other colour.
+    def apply_theme(self):
+        """Follow the Windows app theme: panel, tray menu and statistics window
+        all come from the one stylesheet.
+
+        The tray glyph is deliberately not decided here -- it is painted against
+        the taskbar, whose theme is a separate Windows setting (`icon.py` reads
+        it). The two are normally switched together, so this is still the right
+        moment to re-render the glyph in the other colour.
+        """
+        dark = self._app.styleHints().colorScheme() == Qt.ColorScheme.Dark
+        self._app.setStyleSheet(theme.stylesheet(dark))
+        self._panel.apply_theme(dark)
         self._tray_shows_active = None
         self._refresh_tray()
 
@@ -143,7 +151,6 @@ def main():
     app.setOrganizationName("ugurcandede")
     app.setApplicationName("TapLock")
     app.setWindowIcon(icon.app_icon())
-    app.setStyleSheet(STYLESHEET)
     # No main window: closing the panel must not end the process.
     app.setQuitOnLastWindowClosed(False)
 
