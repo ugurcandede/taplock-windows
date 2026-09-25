@@ -128,10 +128,10 @@ which adds months, years, all time, and a custom date range.
 
 ## Usage stats
 
-TapLock sends an anonymous ping to Google Analytics: a random
-install id, the app version and whether you have run a relax session yet.
-Nothing else — **no keystrokes, no input data, no device names.** Turn it off
-any time by unchecking **send anonymous usage stats** in settings.
+TapLock sends anonymous usage events to Google Analytics — which features you
+use and how, with a random install id. **No keystrokes, no input data, no device
+names.** Turn it off any time by unchecking **send anonymous usage stats** in
+settings.
 
 ## Where things are kept
 
