@@ -16,6 +16,9 @@ from pathlib import Path
 
 DATA_DIR = Path(os.environ.get("APPDATA") or Path.home()) / "taplock"
 CONFIG_PATH = DATA_DIR / "relax-config.json"
+# Exists while a session runs. Survives shutdown, logoff and crashes so the
+# session can resume on next launch; removed when the session stops.
+RUNNING_MARKER = DATA_DIR / "relax-running"
 
 THEMES = ("breathing", "minimal", "mini")
 
@@ -36,9 +39,17 @@ class RelaxConfig:
     opacity: float = 0.85
     silent: bool = False
     show_posture_reminder: bool = True
+    # Seconds between posture reminders while waiting; None keeps the single
+    # reminder halfway through the interval. Shared with macOS.
+    posture_interval: int | None = None
     # Windows-only; macOS ignores these keys.
     show_timer_in_tray: bool = False
+    # Separate from show_timer_in_tray, which existing config files already carry
+    # as false: the tooltip has always shown the countdown, so it stays on.
+    show_timer_in_tooltip: bool = True
     launch_at_login: bool = False
+    resume_on_launch: bool = False
+    send_usage_stats: bool = True
 
 
 # attribute -> on-disk key. The first seven must stay byte-identical to Swift.
@@ -50,8 +61,12 @@ _KEYS = {
     "opacity": "opacity",
     "silent": "silent",
     "show_posture_reminder": "showPostureReminder",
+    "posture_interval": "postureInterval",
     "show_timer_in_tray": "showTimerInTray",
+    "show_timer_in_tooltip": "showTimerInTooltip",
     "launch_at_login": "launchAtLogin",
+    "resume_on_launch": "resumeOnLaunch",
+    "send_usage_stats": "sendUsageStats",
 }
 
 
@@ -66,6 +81,12 @@ def load(path=CONFIG_PATH):
     config = RelaxConfig()
     for name, key in _KEYS.items():
         if key not in raw:
+            continue
+        if name == "posture_interval":
+            # Optional: the type-of-default coercion below cannot handle None.
+            value = raw[key]
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                config.posture_interval = value
             continue
         try:
             setattr(config, name, type(getattr(config, name))(raw[key]))
@@ -85,3 +106,19 @@ def save(config, path=CONFIG_PATH):
     temp = path.with_name(path.name + ".tmp")
     temp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     os.replace(temp, path)  # atomic: a crash mid-write cannot truncate the config
+
+
+def was_running(path=RUNNING_MARKER):
+    return Path(path).exists()
+
+
+def set_running(running, path=RUNNING_MARKER):
+    path = Path(path)
+    try:
+        if running:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+        else:
+            path.unlink(missing_ok=True)
+    except OSError:
+        pass  # resume simply does not happen; not worth failing a session over

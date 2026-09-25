@@ -10,11 +10,13 @@ session, which keeps the state machine testable without Qt.
 
 import sys
 import winsound
+from datetime import datetime
 
 from PySide6.QtCore import QSharedMemory, Qt, QTimer
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
+import analytics
 import config
 import icon
 import startup
@@ -32,6 +34,10 @@ _GUARD_KEY = "TapLock-single-instance"
 _IPC_KEY = "TapLock-ipc"
 
 TICK_MS = 1000
+
+# The app can run for weeks between launches; a periodic check keeps daily
+# actives honest. ping_if_due itself sends at most once per day.
+ANALYTICS_CHECK_MS = 6 * 3600 * 1000
 
 # How long a theme preview stays up, matching the macOS popover.
 PREVIEW_MS = 5000
@@ -86,8 +92,8 @@ class TrayApp:
         self._session.posture_dismissed.connect(self._overlays.close_posture)
         self._overlays.posture_dismissed.connect(self._on_posture_dismissed)
 
-        # Previews reuse the break overlays; settings are only reachable while
-        # idle, so there is never a real break to collide with.
+        # Previews reuse the break overlays, so they are refused while a session
+        # runs -- a preview must never collide with a real break.
         self._preview_timer = QTimer(app)
         self._preview_timer.setSingleShot(True)
         self._preview_timer.timeout.connect(self._end_preview)
@@ -102,9 +108,35 @@ class TrayApp:
         self._timer.start()
 
         self._session.state_changed.connect(self._refresh_tray)
+        self._marked_running = False
+        self._session.state_changed.connect(self._sync_running_marker)
         app.styleHints().colorSchemeChanged.connect(self.apply_theme)
         self.apply_theme()  # also paints the first tray icon
         self._tray.show()
+
+        # Back from a shutdown, logoff or crash mid-session: start over with a
+        # full interval. quit() stops the session, which clears the marker.
+        if self._config.resume_on_launch and config.was_running():
+            self._session.start(self._config)
+
+        self._analytics_timer = QTimer(app)
+        self._analytics_timer.setInterval(ANALYTICS_CHECK_MS)
+        self._analytics_timer.timeout.connect(self._ping_analytics)
+        self._analytics_timer.start()
+        self._ping_analytics()
+
+    def _ping_analytics(self):
+        if self._config.send_usage_stats:
+            analytics.ping_if_due(datetime.now().astimezone())
+
+    def _sync_running_marker(self):
+        # state_changed fires every tick; only touch the disk on a transition.
+        running = self._session.running
+        if running != self._marked_running:
+            self._marked_running = running
+            config.set_running(running)
+            if running:
+                analytics.set_last_mode("relax")
 
     def _tick(self):
         self._session.tick()
@@ -181,7 +213,7 @@ class TrayApp:
             self._tray_shows_active = running
             self._tray.setIcon(icon.tray_icon(running))
             self._stop_action.setVisible(running)
-        if running:
+        if running and self._config.show_timer_in_tooltip:
             phase = "break" if self._session.on_break else "next break"
             self._tray.setToolTip(f"TapLock — {phase} in {format_mmss(self._session.remaining)}")
         else:

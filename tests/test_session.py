@@ -303,3 +303,126 @@ def test_stopping_during_a_break_logs_it_as_skipped(relax, clock, events):
 def test_stop_while_idle_writes_nothing(relax, events):
     relax.stop()
     assert events == []
+
+
+# ---- break now / restart -------------------------------------------------
+
+
+def test_break_now_starts_the_break_immediately(relax, clock):
+    relax.start(config())
+    run_for(relax, clock, 30)
+    relax.start_break_now()
+    assert relax.state == BREAK
+    assert relax.remaining == 20
+
+
+def test_break_now_outside_waiting_does_nothing(relax, clock):
+    relax.start_break_now()
+    assert relax.state == IDLE
+    relax.start(config())
+    run_for(relax, clock, 100)
+    assert relax.state == BREAK
+    run_for(relax, clock, 5)
+    relax.start_break_now()
+    assert relax.remaining == 15
+
+
+def test_restart_resets_the_countdown(relax, clock):
+    relax.start(config())
+    run_for(relax, clock, 60)
+    relax.restart_countdown()
+    assert relax.state == WAITING
+    assert relax.remaining == 100
+
+
+def test_restart_during_a_break_does_nothing(relax, clock):
+    relax.start(config())
+    run_for(relax, clock, 100)
+    relax.restart_countdown()
+    assert relax.state == BREAK
+
+
+# ---- posture interval ----------------------------------------------------
+
+
+def test_posture_repeats_every_interval(relax, clock):
+    seen = []
+    relax.posture_due.connect(lambda: seen.append(round(clock.mono - 1000)))
+    relax.start(config(show_posture_reminder=True, posture_interval=30))
+    run_for(relax, clock, 99)
+    assert seen == [30, 60, 90]
+
+
+def test_posture_interval_restarts_after_a_break(relax, clock):
+    seen = []
+    relax.posture_due.connect(lambda: seen.append(round(clock.mono - 1000)))
+    relax.start(config(show_posture_reminder=True, posture_interval=30))
+    run_for(relax, clock, 100 + 20 + 30)
+    assert seen == [30, 60, 90, 150]
+
+
+def test_posture_interval_not_shorter_than_interval_never_fires(relax, clock):
+    seen = []
+    relax.posture_due.connect(lambda: seen.append("due"))
+    relax.start(config(show_posture_reminder=True, posture_interval=100))
+    run_for(relax, clock, 100)
+    assert seen == []
+
+
+# ---- settings changed mid-wait -------------------------------------------
+
+
+def test_posture_interval_change_applies_to_the_current_wait(relax, clock):
+    seen = []
+    relax.posture_due.connect(lambda: seen.append(round(clock.mono - 1000)))
+    cfg = config(show_posture_reminder=True)
+    relax.start(cfg)
+    run_for(relax, clock, 35)
+    cfg.posture_interval = 20
+    relax.settings_changed()
+    run_for(relax, clock, 64)
+    assert seen == [40, 60, 80]
+
+
+def test_turning_posture_off_cancels_the_pending_reminder(relax, clock):
+    seen = []
+    relax.posture_due.connect(lambda: seen.append("due"))
+    cfg = config(show_posture_reminder=True)
+    relax.start(cfg)
+    run_for(relax, clock, 30)
+    cfg.show_posture_reminder = False
+    relax.settings_changed()
+    run_for(relax, clock, 69)
+    assert seen == []
+
+
+def test_turning_posture_off_dismisses_a_visible_reminder(relax, clock):
+    seen = []
+    relax.posture_dismissed.connect(lambda: seen.append("gone"))
+    cfg = config(show_posture_reminder=True)
+    relax.start(cfg)
+    run_for(relax, clock, 52)
+    cfg.show_posture_reminder = False
+    relax.settings_changed()
+    assert seen == ["gone"]
+
+
+def test_turning_posture_on_after_halfway_waits_for_the_next_cycle(relax, clock):
+    seen = []
+    relax.posture_due.connect(lambda: seen.append("due"))
+    cfg = config()
+    relax.start(cfg)
+    run_for(relax, clock, 60)
+    cfg.show_posture_reminder = True
+    relax.settings_changed()
+    run_for(relax, clock, 39)
+    assert seen == []
+
+
+def test_settings_changed_while_idle_or_on_break_does_nothing(relax, clock):
+    relax.settings_changed()
+    relax.start(config(show_posture_reminder=True))
+    run_for(relax, clock, 100)
+    assert relax.state == BREAK
+    relax.settings_changed()
+    assert relax.state == BREAK

@@ -53,6 +53,7 @@ class RelaxSession(QObject):
         self._state = IDLE
         self._config = None
         self._deadline = 0.0
+        self._wait_started = 0.0
         self._posture_at = None
         self._posture_off_at = None
         self._session_started_at = None
@@ -130,8 +131,32 @@ class RelaxSession(QObject):
         self._begin_waiting()
         self.state_changed.emit()
 
+    def start_break_now(self):
+        """Start the upcoming break instead of waiting for the interval."""
+        if self._state != WAITING:
+            return
+        self._start_break()
+        self.state_changed.emit()
+
+    def restart_countdown(self):
+        """Discard the running countdown and wait a full interval again."""
+        if self._state != WAITING:
+            return
+        self._dismiss_posture()
+        self._begin_waiting()
+        self.state_changed.emit()
+
     def dismiss_posture(self):
         self._dismiss_posture()
+
+    def settings_changed(self):
+        """Re-plan the posture reminder after the shared config was edited, so
+        the change applies to the current wait rather than the next one."""
+        if self._state != WAITING:
+            return
+        if not self._config.show_posture_reminder:
+            self._dismiss_posture()
+        self._plan_posture(self._monotonic())
 
     # ---- the tick --------------------------------------------------------
 
@@ -152,7 +177,9 @@ class RelaxSession(QObject):
             self._dismiss_posture()
 
         if self._posture_at is not None and now >= self._posture_at:
-            self._posture_at = None
+            every = self._config.posture_interval
+            following = self._posture_at + every if every else None
+            self._posture_at = following if following is not None and following < self._deadline else None
             self._posture_off_at = now + POSTURE_VISIBLE
             self.posture_due.emit()
 
@@ -171,11 +198,28 @@ class RelaxSession(QObject):
         now = self._monotonic()
         config = self._config
         self._state = WAITING
+        self._wait_started = now
         self._deadline = now + config.interval
+        self._plan_posture(now)
 
+    def _plan_posture(self, now):
+        """Next posture reminder of the current wait, measured from its start so
+        a mid-wait config change stays aligned with the countdown."""
+        config = self._config
         self._posture_at = None
-        if config.show_posture_reminder and config.interval > POSTURE_MIN_INTERVAL:
-            self._posture_at = now + config.interval / 2
+        if not config.show_posture_reminder:
+            return
+        every = config.posture_interval
+        if every:
+            # Repeats every posture_interval until the break; see tick().
+            if every < config.interval:
+                following = self._wait_started + (math.floor((now - self._wait_started) / every) + 1) * every
+                if following < self._deadline:
+                    self._posture_at = following
+        elif config.interval > POSTURE_MIN_INTERVAL:
+            halfway = self._wait_started + config.interval / 2
+            if halfway > now:
+                self._posture_at = halfway
 
     def _start_break(self):
         self._dismiss_posture()

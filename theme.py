@@ -106,6 +106,18 @@ QLineEdit#duration {
     selection-color: #FFFFFF;
 }
 
+/* Small number field inside a settings row, styled like the combo box. */
+QLineEdit#setting {
+    background-color: $accent_soft;
+    border: none;
+    border-radius: 6px;
+    padding: 2px 6px;
+    color: $text;
+    font-size: 12px;
+    selection-background-color: $accent;
+    selection-color: #FFFFFF;
+}
+
 /* s / m / h segmented picker. No checked background here: the selection is a
    pill painted behind the buttons so it can slide between them. */
 QPushButton#segment {

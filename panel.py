@@ -6,8 +6,9 @@ popup is unreliable and this panel holds text fields, so it hides on
 `WindowDeactivate` instead.
 
 Two layouts share the card: the idle form (interval / break / presets / start /
-settings) and the running view (countdown / skip / stop), swapped from the
-session's `state_changed`.
+stats) and the running view (countdown / break now / restart / skip / stop),
+swapped from the session's `state_changed`. Settings sit below both, so they can
+be changed mid-session; the session reads the same config object.
 """
 
 from PySide6.QtCore import QEasingCurve, QEvent, QRect, QRectF, Qt, QVariantAnimation, Signal
@@ -408,6 +409,12 @@ class Panel(QWidget):
 
         body.addWidget(_divider())
 
+        self._settings_section = _Section("settings", self._build_settings())
+        self._settings_section.resized.connect(self._reflow)
+        body.addWidget(self._settings_section)
+
+        body.addWidget(_divider())
+
         quit_button = QPushButton("quit taplock")
         quit_button.setObjectName("plain")
         quit_button.setFocusPolicy(Qt.NoFocus)
@@ -473,12 +480,6 @@ class Panel(QWidget):
         self._stats_section.opened.connect(self._refresh_stats)
         self._stats_section.resized.connect(self._reflow)
         layout.addWidget(self._stats_section)
-
-        layout.addWidget(_divider())
-
-        self._settings_section = _Section("settings", self._build_settings())
-        self._settings_section.resized.connect(self._reflow)
-        layout.addWidget(self._settings_section)
 
         return page
 
@@ -586,13 +587,14 @@ class Panel(QWidget):
         layout.addWidget(self._row("transparency", *self._alphas.buttons(), spacing=2))
 
         self._launch_switch = _Switch()
+        self._resume_switch = _Switch()
         self._silent_switch = _Switch()
+        self._tooltip_timer_switch = _Switch()
+        self._usage_stats_switch = _Switch()
         self._posture_switch = _Switch()
-        for switch in (self._launch_switch, self._silent_switch, self._posture_switch):
+        for switch in self._switches():
             switch.toggled.connect(self._save_settings)
 
-        layout.addWidget(self._row("launch at login", self._launch_switch))
-        layout.addWidget(self._row("silent", self._silent_switch))
         layout.addWidget(
             self._row(
                 "posture reminder",
@@ -600,6 +602,27 @@ class Panel(QWidget):
                 self._posture_switch,
             )
         )
+
+        self._posture_every = QLineEdit()
+        self._posture_every.setObjectName("setting")
+        self._posture_every.setPlaceholderText("auto")
+        self._posture_every.setFixedWidth(44)
+        self._posture_every.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._posture_every.setValidator(QIntValidator(1, 999, self))
+        self._posture_every.setFocusPolicy(Qt.ClickFocus)
+        self._posture_every.textChanged.connect(self._save_settings)
+        self._posture_every_row = self._row("every", self._posture_every, _caption("min"))
+        self._posture_every_row.layout().setContentsMargins(12, 0, 0, 0)
+        self._posture_switch.toggled.connect(self._show_posture_every)
+        layout.addWidget(self._posture_every_row)
+
+        layout.addWidget(_divider())
+
+        layout.addWidget(self._row("launch at login", self._launch_switch))
+        layout.addWidget(self._row("resume after restart", self._resume_switch))
+        layout.addWidget(self._row("silent", self._silent_switch))
+        layout.addWidget(self._row("show timer in tooltip", self._tooltip_timer_switch))
+        layout.addWidget(self._row("send anonymous usage stats", self._usage_stats_switch))
 
         layout.addWidget(_divider())
 
@@ -658,6 +681,20 @@ class Panel(QWidget):
             layout.addWidget(widget)
         return row
 
+    def _switches(self):
+        return (
+            self._launch_switch,
+            self._resume_switch,
+            self._silent_switch,
+            self._tooltip_timer_switch,
+            self._usage_stats_switch,
+            self._posture_switch,
+        )
+
+    def _show_posture_every(self, visible):
+        self._posture_every_row.setVisible(visible)
+        self._reflow()
+
     def _preview_button(self, tooltip, slot):
         button = QPushButton("preview")
         button.setObjectName("preset")
@@ -685,6 +722,22 @@ class Panel(QWidget):
 
         layout.addSpacing(6)
 
+        self._waiting_actions = QWidget()
+        actions = QHBoxLayout(self._waiting_actions)
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.setSpacing(8)
+        for text, name, slot in (
+            ("break now", "primary", self._session.start_break_now),
+            ("restart", "warning", self._session.restart_countdown),
+        ):
+            button = QPushButton(text)
+            button.setObjectName(name)
+            button.setFocusPolicy(Qt.NoFocus)
+            button.setCursor(Qt.PointingHandCursor)
+            button.clicked.connect(slot)
+            actions.addWidget(button)
+        layout.addWidget(self._waiting_actions)
+
         self._skip = QPushButton("skip")
         self._skip.setObjectName("warning")
         self._skip.setFocusPolicy(Qt.NoFocus)
@@ -707,7 +760,7 @@ class Panel(QWidget):
         """The stylesheet handles colours; these three are painted in code, and
         the values that read well on a dark card are wrong on a light one."""
         self._shadow.setColor(QColor(0, 0, 0, 150 if dark else 55))
-        for switch in (self._launch_switch, self._silent_switch, self._posture_switch):
+        for switch in self._switches():
             switch.apply_theme(dark)
         for swatch in self._swatches.buttons():
             swatch.apply_theme(dark)
@@ -742,8 +795,14 @@ class Panel(QWidget):
         nearest = min(self._alphas.buttons(), key=lambda b: abs(b.opacity - self._config.opacity))
         nearest.setChecked(True)
         self._silent_switch.setChecked(self._config.silent)
+        self._tooltip_timer_switch.setChecked(self._config.show_timer_in_tooltip)
+        self._usage_stats_switch.setChecked(self._config.send_usage_stats)
         self._posture_switch.setChecked(self._config.show_posture_reminder)
+        every = self._config.posture_interval
+        self._posture_every.setText(str(every // 60) if every else "")
+        self._show_posture_every(self._config.show_posture_reminder)
         self._launch_switch.setChecked(startup.is_enabled())
+        self._resume_switch.setChecked(self._config.resume_on_launch)
         self._loading = False
 
     def _save_settings(self):
@@ -759,10 +818,16 @@ class Panel(QWidget):
         if alpha is not None:
             self._config.opacity = alpha.opacity
         self._config.silent = self._silent_switch.isChecked()
+        self._config.show_timer_in_tooltip = self._tooltip_timer_switch.isChecked()
+        self._config.send_usage_stats = self._usage_stats_switch.isChecked()
         self._config.show_posture_reminder = self._posture_switch.isChecked()
+        minutes = self._posture_every.text().strip()
+        self._config.posture_interval = int(minutes) * 60 if minutes.isdigit() and int(minutes) > 0 else None
+        self._config.resume_on_launch = self._resume_switch.isChecked()
         self._config.launch_at_login = self._launch_switch.isChecked()
         startup.set_enabled(self._config.launch_at_login)
         config.save(self._config)
+        self._session.settings_changed()
 
     def _apply_preset(self, interval_minutes, break_minutes):
         self._interval_edit.count_to(interval_minutes)
@@ -819,6 +884,7 @@ class Panel(QWidget):
         self._idle.setVisible(not running)
         self._active.setVisible(running)
         self._skip.setVisible(on_break)
+        self._waiting_actions.setVisible(running and not on_break)
         if not running:
             self._set_error(None)
         self._reflow()
