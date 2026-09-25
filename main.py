@@ -9,10 +9,10 @@ session, which keeps the state machine testable without Qt.
 """
 
 import sys
+import time
 import winsound
-from datetime import datetime
 
-from PySide6.QtCore import QSharedMemory, Qt, QTimer
+from PySide6.QtCore import QLocale, QSharedMemory, Qt, QTimer
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
@@ -26,6 +26,7 @@ from panel import Panel
 from parsers import format_mmss
 from session import RelaxSession
 from statswindow import StatisticsWindow
+from updates import UpdateChecker
 
 # Shared-memory segment whose existence means "an instance is already running".
 # Creating it is atomic, so two launches milliseconds apart cannot both win.
@@ -38,6 +39,8 @@ TICK_MS = 1000
 # The app can run for weeks between launches; a periodic check keeps daily
 # actives honest. ping_if_due itself sends at most once per day.
 ANALYTICS_CHECK_MS = 6 * 3600 * 1000
+HEARTBEAT_MS = analytics.HEARTBEAT_SECONDS * 1000
+UPDATE_CHECK_MS = 24 * 3600 * 1000
 
 # How long a theme preview stays up, matching the macOS popover.
 PREVIEW_MS = 5000
@@ -114,20 +117,42 @@ class TrayApp:
         self.apply_theme()  # also paints the first tray icon
         self._tray.show()
 
-        # Back from a shutdown, logoff or crash mid-session: start over with a
-        # full interval. quit() stops the session, which clears the marker.
-        if self._config.resume_on_launch and config.was_running():
-            self._session.start(self._config)
+        # Before the resume below, so a resumed session is tracked.
+        analytics.start(enabled=lambda: self._config.send_usage_stats)
+        analytics.set_user_properties({"language": QLocale.system().name().split("_")[0]})
+        self._panel.refresh_user_properties()
+        self._relax_started_at = None
+        self._break_started_at = None
+        self._breaks = 0
+        self._resuming = False
+        self._quit_tracked = False
+        self._session.break_started.connect(self._track_break_start)
+        self._session.break_ended.connect(self._track_break_end)
+        app.aboutToQuit.connect(self._track_quit)  # also fires on logoff/shutdown
 
         self._analytics_timer = QTimer(app)
         self._analytics_timer.setInterval(ANALYTICS_CHECK_MS)
-        self._analytics_timer.timeout.connect(self._ping_analytics)
+        self._analytics_timer.timeout.connect(analytics.ping_if_due)
         self._analytics_timer.start()
-        self._ping_analytics()
+        self._heartbeat_timer = QTimer(app)
+        self._heartbeat_timer.setInterval(HEARTBEAT_MS)
+        self._heartbeat_timer.timeout.connect(lambda: analytics.heartbeat(self._heartbeat_params()))
+        self._heartbeat_timer.start()
 
-    def _ping_analytics(self):
-        if self._config.send_usage_stats:
-            analytics.ping_if_due(datetime.now().astimezone())
+        # Back from a shutdown, logoff or crash mid-session: start over with a
+        # full interval. quit() stops the session, which clears the marker.
+        if self._config.resume_on_launch and config.was_running():
+            self._resuming = True
+            self._session.start(self._config)
+            self._resuming = False
+
+        self._updates = UpdateChecker()
+        self._updates.found.connect(self._panel.set_update)
+        self._updates.check()
+        self._update_timer = QTimer(app)
+        self._update_timer.setInterval(UPDATE_CHECK_MS)
+        self._update_timer.timeout.connect(self._updates.check)
+        self._update_timer.start()
 
     def _sync_running_marker(self):
         # state_changed fires every tick; only touch the disk on a transition.
@@ -136,7 +161,68 @@ class TrayApp:
             self._marked_running = running
             config.set_running(running)
             if running:
-                analytics.set_last_mode("relax")
+                self._track_relax_start()
+            else:
+                self._track_relax_end()
+
+    # ---- analytics -------------------------------------------------------
+
+    def _track_relax_start(self):
+        analytics.set_last_mode("relax")
+        self._relax_started_at = time.monotonic()
+        self._breaks = 0
+        c = self._config
+        analytics.track("relax_start", {
+            "interval_sec": c.interval,
+            "break_sec": c.break_duration,
+            "theme": c.theme,
+            "color": c.color,
+            "transparency": config.transparency_label(c.opacity),
+            "silent": c.silent,
+            "posture": c.show_posture_reminder,
+            "posture_interval_sec": c.posture_interval or 0,
+            "resumed": self._resuming,
+        })
+
+    def _track_relax_end(self):
+        if self._relax_started_at is None:
+            return
+        analytics.track("relax_end", {
+            "duration_sec": int(time.monotonic() - self._relax_started_at),
+            "breaks": self._breaks,
+        })
+        self._relax_started_at = None
+
+    def _track_break_start(self):
+        self._break_started_at = time.monotonic()
+        analytics.track("break_start", {
+            "trigger": self._session.break_trigger,
+            "break_sec": self._config.break_duration,
+        })
+
+    def _track_break_end(self):
+        if self._break_started_at is None:
+            return
+        planned = self._config.break_duration
+        actual = int(time.monotonic() - self._break_started_at)
+        analytics.track("break_end", {
+            "planned_sec": planned,
+            "actual_sec": actual,
+            "skipped": actual < planned - 1,
+        })
+        self._break_started_at = None
+        self._breaks += 1
+
+    def _heartbeat_params(self):
+        if not self._session.running:
+            return None
+        return {"mode": "relax", "state": "break" if self._session.on_break else "waiting"}
+
+    def _track_quit(self):
+        if self._quit_tracked:
+            return
+        self._quit_tracked = True
+        analytics.app_will_terminate()
 
     def _tick(self):
         self._session.tick()
@@ -150,6 +236,7 @@ class TrayApp:
     def _show_preview(self):
         if self._session.running:
             return
+        analytics.track("theme_previewed", {"theme": self._config.theme})
         self._overlays.open(self._config)
         self._overlays.set_remaining(self._config.break_duration)
         self._preview_timer.start(PREVIEW_MS)
@@ -161,6 +248,7 @@ class TrayApp:
     def _show_posture_preview(self):
         if self._session.running:
             return
+        analytics.track("posture_previewed")
         self._overlays.open_posture()
         self._preview_timer.start(PREVIEW_MS)
 
@@ -175,6 +263,7 @@ class TrayApp:
     def _show_statistics(self):
         # Kept between openings so it reappears where the user left it; the
         # panel dismisses itself as soon as the window takes focus.
+        analytics.track("statistics_window_opened")
         if self._statistics is None:
             self._statistics = StatisticsWindow()
         self._statistics.refresh()

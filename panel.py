@@ -11,8 +11,8 @@ swapped from the session's `state_changed`. Settings sit below both, so they can
 be changed mid-session; the session reads the same config object.
 """
 
-from PySide6.QtCore import QEasingCurve, QEvent, QRect, QRectF, Qt, QVariantAnimation, Signal
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QIntValidator, QPainter
+from PySide6.QtCore import QEasingCurve, QEvent, QRect, QRectF, Qt, QUrl, QVariantAnimation, Signal
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QGuiApplication, QIntValidator, QPainter
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -29,10 +29,12 @@ from PySide6.QtWidgets import (
 
 from datetime import datetime
 
+import analytics
 import config
 import icon
 import startup
 import stats
+import updates
 from parsers import (
     PRESET_COLORS,
     UNIT_SECONDS,
@@ -369,6 +371,8 @@ class Panel(QWidget):
         self._anchor = QRect()
         self._layout_key = None
         self._loading = False
+        self._update = None
+        self._banner_tracked_version = None
 
         self._build()
         self._load_config()
@@ -395,6 +399,8 @@ class Panel(QWidget):
         body.setContentsMargins(0, 10, 0, 4)
         body.setSpacing(0)
 
+        body.addWidget(self._build_update_banner())
+
         self._error = QLabel()
         self._error.setObjectName("error")
         self._error.setAlignment(Qt.AlignCenter)
@@ -411,6 +417,7 @@ class Panel(QWidget):
 
         self._settings_section = _Section("settings", self._build_settings())
         self._settings_section.resized.connect(self._reflow)
+        self._settings_section.opened.connect(lambda: analytics.track("settings_opened", {"mode": "relax"}))
         body.addWidget(self._settings_section)
 
         body.addWidget(_divider())
@@ -421,6 +428,35 @@ class Panel(QWidget):
         quit_button.setCursor(Qt.PointingHandCursor)
         quit_button.clicked.connect(self._on_quit)
         body.addWidget(quit_button)
+
+    def _build_update_banner(self):
+        self._banner = QWidget()
+        outer = QHBoxLayout(self._banner)
+        outer.setContentsMargins(12, 0, 12, 6)
+        box = QFrame()
+        box.setObjectName("banner")
+        outer.addWidget(box)
+        row = QHBoxLayout(box)
+        row.setContentsMargins(10, 4, 6, 4)
+        row.setSpacing(6)
+        self._banner_label = QLabel()
+        self._banner_label.setObjectName("bannerText")
+        row.addWidget(self._banner_label)
+        row.addStretch()
+        for text, tooltip, slot in (
+            ("notes", "Open the release notes", self._open_update_notes),
+            ("download", "Download the new TapLock.exe", self._download_update),
+            ("×", "Hide until the next version", self._dismiss_update),
+        ):
+            button = QPushButton(text)
+            button.setObjectName("bannerAction")
+            button.setFocusPolicy(Qt.NoFocus)
+            button.setCursor(Qt.PointingHandCursor)
+            button.setToolTip(tooltip)
+            button.clicked.connect(slot)
+            row.addWidget(button)
+        self._banner.hide()
+        return self._banner
 
     def _build_idle(self):
         page = QWidget()
@@ -478,6 +514,7 @@ class Panel(QWidget):
 
         self._stats_section = _Section("stats", self._build_stats())
         self._stats_section.opened.connect(self._refresh_stats)
+        self._stats_section.opened.connect(lambda: analytics.track("stats_opened", {"mode": "relax"}))
         self._stats_section.resized.connect(self._reflow)
         layout.addWidget(self._stats_section)
 
@@ -495,6 +532,9 @@ class Panel(QWidget):
         self._period.setFocusPolicy(Qt.NoFocus)
         self._period.setCursor(Qt.PointingHandCursor)
         self._period.currentIndexChanged.connect(self._refresh_stats)
+        self._period.currentIndexChanged.connect(
+            lambda _: analytics.track("stats_period_changed", {"period": self._period.currentData()})
+        )
         layout.addWidget(self._row("period", self._period))
 
         self._metrics = {}
@@ -728,7 +768,7 @@ class Panel(QWidget):
         actions.setSpacing(8)
         for text, name, slot in (
             ("break now", "primary", self._session.start_break_now),
-            ("restart", "warning", self._session.restart_countdown),
+            ("restart", "warning", self._restart_countdown),
         ):
             button = QPushButton(text)
             button.setObjectName(name)
@@ -810,6 +850,7 @@ class Panel(QWidget):
         session were lost. Written on every change here instead."""
         if self._loading:
             return
+        before = self._tracked_settings()
         self._config.theme = self._theme_box.currentText()
         checked = self._swatches.checkedButton()
         if checked is not None:
@@ -829,7 +870,68 @@ class Panel(QWidget):
         config.save(self._config)
         self._session.settings_changed()
 
+        if not self._config.send_usage_stats:
+            analytics.disabled()
+        self.refresh_user_properties()  # first, so the events below carry the new values
+        after = self._tracked_settings()
+        for name, value in after.items():
+            if before[name] != value:
+                # usage_stats only lands when turned on: analytics is off otherwise.
+                analytics.track("setting_changed", {"setting": name, "value": str(value).lower()})
+
+    def _tracked_settings(self):
+        """Setting names match the macOS app's setting_changed events."""
+        c = self._config
+        return {
+            "relax_theme": c.theme,
+            "relax_color": c.color,
+            "relax_transparency": config.transparency_label(c.opacity),
+            "relax_silent": c.silent,
+            "relax_posture": c.show_posture_reminder,
+            "relax_tooltip_timer": c.show_timer_in_tooltip,
+            "relax_resume_on_launch": c.resume_on_launch,
+            "launch_at_login": c.launch_at_login,
+            "usage_stats": c.send_usage_stats,
+        }
+
+    def refresh_user_properties(self):
+        """Settings worth slicing every report by."""
+        analytics.set_user_properties({
+            "launch_at_login": self._config.launch_at_login,
+            "resume_on_launch": self._config.resume_on_launch,
+            "relax_theme": self._config.theme,
+        })
+
+    def _restart_countdown(self):
+        config_ = self._session.config
+        if config_ is not None:
+            analytics.track("relax_restart", {"elapsed_sec": config_.interval - self._session.remaining})
+        self._session.restart_countdown()
+
+    # ---- update banner ---------------------------------------------------
+
+    def set_update(self, update):
+        self._update = update
+        if update is not None:
+            self._banner_label.setText(f"v{update.version} available")
+        self._banner.setVisible(update is not None)
+        self._reflow()
+
+    def _open_update_notes(self):
+        analytics.track("update_notes_opened", {"latest_version": self._update.version})
+        QDesktopServices.openUrl(QUrl(self._update.url))
+
+    def _download_update(self):
+        analytics.track("update_downloaded", {"latest_version": self._update.version})
+        QDesktopServices.openUrl(QUrl(updates.DOWNLOAD_URL))
+
+    def _dismiss_update(self):
+        analytics.track("update_dismissed", {"latest_version": self._update.version})
+        updates.dismiss(self._update.version)
+        self.set_update(None)
+
     def _apply_preset(self, interval_minutes, break_minutes):
+        analytics.track("preset_applied", {"mode": "relax", "value": f"{interval_minutes}/{break_minutes}"})
         self._interval_edit.count_to(interval_minutes)
         self._interval_unit.set_unit("m", animate=True)
         self._break_edit.count_to(break_minutes)
@@ -845,11 +947,14 @@ class Panel(QWidget):
     def _start(self):
         interval = self._seconds(self._interval_edit, self._interval_unit)
         if interval is None:
+            analytics.track("relax_error", {"reason": "invalid_interval"})
             return self._set_error("Invalid interval")
         break_duration = self._seconds(self._break_edit, self._break_unit)
         if break_duration is None:
+            analytics.track("relax_error", {"reason": "invalid_break"})
             return self._set_error("Invalid break duration")
         if interval <= break_duration:
+            analytics.track("relax_error", {"reason": "interval_not_longer"})
             return self._set_error("Interval must be longer than break")
 
         self._set_error(None)
@@ -920,6 +1025,11 @@ class Panel(QWidget):
             self.show_at(anchor)
 
     def show_at(self, anchor):
+        state = "active" if self._session.running else "idle"
+        analytics.track("popover_opened", {"mode": "relax", "state": state})
+        if self._update is not None and self._banner_tracked_version != self._update.version:
+            self._banner_tracked_version = self._update.version
+            analytics.track("update_banner_shown", {"latest_version": self._update.version})
         self._anchor = anchor
         self._fit()
         self._place()

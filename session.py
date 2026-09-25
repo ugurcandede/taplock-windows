@@ -59,6 +59,8 @@ class RelaxSession(QObject):
         self._session_started_at = None
         self._break_started_at = None
         self._breaks_taken = 0
+        # "manual" for break now, "timer" otherwise; read when break_started fires.
+        self.break_trigger = "timer"
 
     # ---- public state ----------------------------------------------------
 
@@ -135,7 +137,7 @@ class RelaxSession(QObject):
         """Start the upcoming break instead of waiting for the interval."""
         if self._state != WAITING:
             return
-        self._start_break()
+        self._start_break(trigger="manual")
         self.state_changed.emit()
 
     def restart_countdown(self):
@@ -221,7 +223,8 @@ class RelaxSession(QObject):
             if halfway > now:
                 self._posture_at = halfway
 
-    def _start_break(self):
+    def _start_break(self, trigger="timer"):
+        self.break_trigger = trigger
         self._dismiss_posture()
         self._state = BREAK
         self._break_started_at = self._wall()

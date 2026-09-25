@@ -128,7 +128,7 @@ which adds months, years, all time, and a custom date range.
 
 ## Usage stats
 
-Once a day TapLock sends an anonymous ping to Google Analytics: a random
+TapLock sends an anonymous ping to Google Analytics: a random
 install id, the app version and whether you have run a relax session yet.
 Nothing else — **no keystrokes, no input data, no device names.** Turn it off
 any time by unchecking **send anonymous usage stats** in settings.
@@ -141,7 +141,8 @@ The first two files use the same schema as the macOS build, so a config or a log
 %APPDATA%\taplock\relax-config.json    settings
 %APPDATA%\taplock\events.jsonl         append-only event log
 %APPDATA%\taplock\relax-running        present while a session runs (resume after restart)
-%APPDATA%\taplock\analytics.json       usage stats install id and last ping date
+%APPDATA%\taplock\analytics.json       usage stats install id and unsent events
+%APPDATA%\taplock\update-dismissed     the update banner version you hid
 ```
 
 The log is never rewritten. Events from a macOS install are read as they are, including `lock_completed` records this

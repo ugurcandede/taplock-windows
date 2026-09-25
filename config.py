@@ -26,6 +26,11 @@ THEMES = ("breathing", "minimal", "mini")
 # 0% transparency is fully opaque, 90% is nearly see-through.
 TRANSPARENCY = ((0, 1.0), (15, 0.85), (50, 0.50), (75, 0.25), (90, 0.10))
 
+def transparency_label(opacity):
+    """The preset label ("15") closest to an opacity, as the UI shows it."""
+    return str(min(TRANSPARENCY, key=lambda preset: abs(preset[1] - opacity))[0])
+
+
 # Interval/break presets offered as one-tap buttons, in minutes.
 PRESETS = ((25, 5), (45, 10), (50, 10))
 

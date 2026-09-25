@@ -106,6 +106,21 @@ QLineEdit#duration {
     selection-color: #FFFFFF;
 }
 
+/* "New version available" strip at the top of the panel. */
+QFrame#banner {
+    background-color: $accent_soft;
+    border-radius: 8px;
+}
+QLabel#bannerText { color: $accent; font-size: 11px; font-weight: 600; }
+QPushButton#bannerAction {
+    background: transparent;
+    border: none;
+    color: $accent;
+    font-size: 11px;
+    padding: 2px 4px;
+}
+QPushButton#bannerAction:hover { color: $text; }
+
 /* Small number field inside a settings row, styled like the combo box. */
 QLineEdit#setting {
     background-color: $accent_soft;
