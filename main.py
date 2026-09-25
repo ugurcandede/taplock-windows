@@ -26,6 +26,7 @@ from panel import Panel
 from parsers import format_mmss
 from session import RelaxSession
 from statswindow import StatisticsWindow
+import updates
 from updates import UpdateChecker
 
 # Shared-memory segment whose existence means "an instance is already running".
@@ -146,8 +147,13 @@ class TrayApp:
             self._session.start(self._config)
             self._resuming = False
 
+        if updates.can_self_update():
+            updates.cleanup_previous()  # the exe a previous self-update left behind
         self._updates = UpdateChecker()
         self._updates.found.connect(self._panel.set_update)
+        self._panel.install_update.connect(self._updates.install)
+        self._updates.installed.connect(self.quit)  # the relauncher starts the new exe
+        self._updates.install_failed.connect(self._panel.set_update_failed)
         self._updates.check()
         self._update_timer = QTimer(app)
         self._update_timer.setInterval(UPDATE_CHECK_MS)

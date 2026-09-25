@@ -360,6 +360,7 @@ class Panel(QWidget):
     preview_theme = Signal()
     preview_posture = Signal()
     open_statistics = Signal()
+    install_update = Signal()
 
     def __init__(self, relax_config, session, on_quit):
         super().__init__(None, Qt.FramelessWindowHint | Qt.Tool | Qt.NoDropShadowWindowHint)
@@ -372,6 +373,7 @@ class Panel(QWidget):
         self._layout_key = None
         self._loading = False
         self._update = None
+        self._update_state = "idle"  # idle | updating | failed
         self._banner_tracked_version = None
 
         self._build()
@@ -443,16 +445,13 @@ class Panel(QWidget):
         self._banner_label.setObjectName("bannerText")
         row.addWidget(self._banner_label)
         row.addStretch()
-        for text, tooltip, slot in (
-            ("notes", "Open the release notes", self._open_update_notes),
-            ("download", "Download the new TapLock.exe", self._download_update),
-            ("×", "Hide until the next version", self._dismiss_update),
-        ):
-            button = QPushButton(text)
+        self._update_button = QPushButton()
+        self._dismiss_button = QPushButton("×")
+        self._dismiss_button.setToolTip("Hide until the next version")
+        for button, slot in ((self._update_button, self._start_update), (self._dismiss_button, self._dismiss_update)):
             button.setObjectName("bannerAction")
             button.setFocusPolicy(Qt.NoFocus)
             button.setCursor(Qt.PointingHandCursor)
-            button.setToolTip(tooltip)
             button.clicked.connect(slot)
             row.addWidget(button)
         self._banner.hide()
@@ -911,19 +910,51 @@ class Panel(QWidget):
     # ---- update banner ---------------------------------------------------
 
     def set_update(self, update):
+        if self._update_state == "updating":
+            return  # a daily re-check must not reset a download in flight
         self._update = update
-        if update is not None:
-            self._banner_label.setText(f"v{update.version} available")
+        self._update_state = "idle"
         self._banner.setVisible(update is not None)
+        self._render_banner()
         self._reflow()
 
-    def _open_update_notes(self):
-        analytics.track("update_notes_opened", {"latest_version": self._update.version})
-        QDesktopServices.openUrl(QUrl(self._update.url))
+    def set_update_failed(self):
+        analytics.track("update_failed", {"latest_version": self._update.version, "reason": "exe_swap"})
+        self._update_state = "failed"
+        self._render_banner()
 
-    def _download_update(self):
-        analytics.track("update_downloaded", {"latest_version": self._update.version})
-        QDesktopServices.openUrl(QUrl(updates.DOWNLOAD_URL))
+    def _render_banner(self):
+        if self._update is None:
+            return
+        version_ = self._update.version
+        running = self._session.running
+        text, button, tip = {
+            "idle": (f"v{version_} available", "update", f"Install v{version_} and restart"),
+            "updating": (f"updating to v{version_}…", "", ""),
+            "failed": ("update failed", "retry", "Try the download again"),
+        }[self._update_state]
+        if running and self._update_state != "updating":
+            # Updating restarts the app; not in the middle of a session.
+            button, tip = "after session", "Available once the session ends"
+        self._banner_label.setText(text)
+        self._update_button.setText(button)
+        self._update_button.setToolTip(tip)
+        self._update_button.setVisible(bool(button))
+        self._update_button.setEnabled(not running)
+        self._dismiss_button.setVisible(self._update_state != "updating")
+
+    def _start_update(self):
+        if self._update is None or self._session.running or self._update_state == "updating":
+            return
+        if not updates.can_self_update():
+            # Running from source: there is no exe to replace.
+            analytics.track("update_started", {"latest_version": self._update.version, "result": "release_page"})
+            QDesktopServices.openUrl(QUrl(self._update.url))
+            return
+        analytics.track("update_started", {"latest_version": self._update.version, "result": "exe_swap"})
+        self._update_state = "updating"
+        self._render_banner()
+        self.install_update.emit()
 
     def _dismiss_update(self):
         analytics.track("update_dismissed", {"latest_version": self._update.version})
@@ -990,6 +1021,7 @@ class Panel(QWidget):
         self._active.setVisible(running)
         self._skip.setVisible(on_break)
         self._waiting_actions.setVisible(running and not on_break)
+        self._render_banner()
         if not running:
             self._set_error(None)
         self._reflow()
