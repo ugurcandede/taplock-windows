@@ -247,6 +247,11 @@ class _Switch(QCheckBox):
         self._on = QColor("#0A84FF" if dark else "#0067C0")
         self.update()
 
+    def hitButton(self, pos):
+        # QCheckBox only takes clicks on its style's small indicator, which is
+        # not where the painted track is.
+        return self.rect().contains(pos)
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
