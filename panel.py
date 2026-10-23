@@ -11,7 +11,7 @@ swapped from the session's `state_changed`. Settings sit below both, so they can
 be changed mid-session; the session reads the same config object.
 """
 
-from PySide6.QtCore import QEasingCurve, QEvent, QLocale, QPoint, QRect, QRectF, Qt, QTime, QUrl, QVariantAnimation, Signal
+from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QEvent, QLocale, QPoint, QRect, QRectF, QSize, Qt, QTime, QUrl, QVariantAnimation, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QGuiApplication, QIntValidator, QPainter
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QLayout,
     QLineEdit,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -63,8 +64,6 @@ SECTION_ANIM_MS = 150
 SEGMENT_ANIM_MS = 140
 # Long enough for the count to read as a count rather than a flicker.
 COUNT_ANIM_MS = 220
-# QWIDGETSIZE_MAX; PySide does not export it.
-_UNBOUNDED = 16777215
 # Windows logo in the about line, sized to sit with 11px text.
 LOGO_PX = 12
 # Every settings row is this tall, whatever it contains. With the 4px spacing
@@ -162,36 +161,93 @@ class _DisclosureRow(QWidget):
         self.clicked.emit()
 
 
-class _Section(QWidget):
-    """A disclosure row with a page that slides open under it.
+class _Reveal(QWidget):
+    """Slides `page` open and shut by animating its own height.
 
-    Owns its own animation so the panel can have more than one collapsible
-    section without duplicating the plumbing.
+    The page keeps its full height and is only clipped. Shrinking the page
+    itself (by its maximum height) squeezed its rows on top of each other part
+    way through, since a layout overlaps what it has no room for.
     """
 
-    opened = Signal()
     resized = Signal()
 
-    def __init__(self, caption, page):
+    def __init__(self, page):
         super().__init__()
         self._page = page
+        page.setParent(self)
         self._open = False
-
-        self._row = _DisclosureRow(caption)
-        self._row.clicked.connect(self.toggle)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        layout.addWidget(self._row)
-        layout.addWidget(page)
-        page.hide()
+        self._height = 0  # None once open and settled: follow the page
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.hide()
 
         self._anim = QVariantAnimation(self)
         self._anim.setDuration(SECTION_ANIM_MS)
         self._anim.setEasingCurve(QEasingCurve.InOutQuad)
         self._anim.valueChanged.connect(self._step)
         self._anim.finished.connect(self._settled)
+
+    def sizeHint(self):
+        page = self._page.sizeHint()
+        return QSize(page.width(), page.height() if self._height is None else self._height)
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
+
+    def resizeEvent(self, event):
+        self._page.setGeometry(0, 0, self.width(), self._page.sizeHint().height())
+
+    def set_open(self, is_open, animate=True):
+        if not animate:
+            self._anim.stop()
+            self._open = is_open
+            self._settled()
+            return
+        if is_open == self._open:
+            return
+        self._open = is_open
+        start = self.height() if self.isVisible() else 0
+        self.show()
+        self._anim.stop()
+        self._anim.setStartValue(start)
+        self._anim.setEndValue(self._page.sizeHint().height() if is_open else 0)
+        self._anim.start()
+
+    def _step(self, height):
+        # Setting the end value on a stopped animation reports it straight away,
+        # which would show the end state for a frame before the slide starts.
+        if self._anim.state() != QAbstractAnimation.Running:
+            return
+        self._height = int(height)
+        self.updateGeometry()
+        self.resized.emit()
+
+    def _settled(self):
+        self._height = None if self._open else 0
+        self.setVisible(self._open)  # hidden, it takes no layout spacing either
+        self.updateGeometry()
+        self.resized.emit()
+
+
+class _Section(QWidget):
+    """A disclosure row with a page that slides open under it."""
+
+    opened = Signal()
+    resized = Signal()
+
+    def __init__(self, caption, page):
+        super().__init__()
+        self._open = False
+
+        self._row = _DisclosureRow(caption)
+        self._row.clicked.connect(self.toggle)
+        self._reveal = _Reveal(page)
+        self._reveal.resized.connect(self.resized)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self._row)
+        layout.addWidget(self._reveal)
 
     @property
     def is_open(self):
@@ -203,31 +259,9 @@ class _Section(QWidget):
     def toggle(self):
         self._open = not self._open
         self._row.set_open(self._open)
-
         if self._open:
-            # It has to be visible to be animated, so it opens at zero height.
-            self._page.setMaximumHeight(0)
-            self._page.show()
-            self.opened.emit()
-            start, end = 0, self._page.sizeHint().height()
-        else:
-            start, end = self._page.height(), 0
-
-        self._anim.stop()
-        self._anim.setStartValue(start)
-        self._anim.setEndValue(end)
-        self._anim.start()
-
-    def _step(self, height):
-        self._page.setMaximumHeight(int(height))
-        self.resized.emit()
-
-    def _settled(self):
-        if self._open:
-            self._page.setMaximumHeight(_UNBOUNDED)  # let it grow again
-        else:
-            self._page.hide()
-        self.resized.emit()
+            self.opened.emit()  # before measuring: stats fills its page here
+        self._reveal.set_open(self._open)
 
 
 class _Switch(QCheckBox):
@@ -1307,10 +1341,10 @@ class Panel(QWidget):
         # first drops those cached hints so the size is correct in the same call,
         # with no intermediate frame at the wrong height. A row shown or hidden
         # deeper down (quiet hours) is only picked up one nesting level per pass,
-        # so every nested widget drops its cached size hint as well.
+        # so every nested widget (and each _Reveal, which has no layout to
+        # notice its page changing) drops its cached size hint as well.
         for widget in self.findChildren(QWidget):
-            if widget.layout() is not None:
-                widget.updateGeometry()
+            widget.updateGeometry()
         for layout in (self._card.layout(), self.layout()):
             layout.invalidate()
             layout.activate()
