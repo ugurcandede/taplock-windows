@@ -14,6 +14,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from schedule import RelaxSchedule
+
 DATA_DIR = Path(os.environ.get("APPDATA") or Path.home()) / "taplock"
 CONFIG_PATH = DATA_DIR / "relax-config.json"
 # Exists while a session runs. Survives shutdown, logoff and crashes so the
@@ -47,6 +49,9 @@ class RelaxConfig:
     # Seconds between posture reminders while waiting; None keeps the single
     # reminder halfway through the interval. Shared with macOS.
     posture_interval: int | None = None
+    # Active days/hours, quiet hours, fixed break times; None keeps the plain
+    # "every interval" behavior. Shared with macOS, weekdays in Swift numbering.
+    schedule: RelaxSchedule | None = None
     # Windows-only; macOS ignores these keys.
     show_timer_in_tray: bool = False
     # Separate from show_timer_in_tray, which existing config files already carry
@@ -57,7 +62,7 @@ class RelaxConfig:
     send_usage_stats: bool = True
 
 
-# attribute -> on-disk key. The first seven must stay byte-identical to Swift.
+# attribute -> on-disk key. The first nine must stay byte-identical to Swift.
 _KEYS = {
     "interval": "interval",
     "break_duration": "breakDuration",
@@ -67,6 +72,7 @@ _KEYS = {
     "silent": "silent",
     "show_posture_reminder": "showPostureReminder",
     "posture_interval": "postureInterval",
+    "schedule": "schedule",
     "show_timer_in_tray": "showTimerInTray",
     "show_timer_in_tooltip": "showTimerInTooltip",
     "launch_at_login": "launchAtLogin",
@@ -93,6 +99,9 @@ def load(path=CONFIG_PATH):
             if isinstance(value, int) and not isinstance(value, bool) and value > 0:
                 config.posture_interval = value
             continue
+        if name == "schedule":
+            config.schedule = RelaxSchedule.from_json(raw[key])
+            continue
         try:
             setattr(config, name, type(getattr(config, name))(raw[key]))
         except (TypeError, ValueError):
@@ -108,6 +117,8 @@ def save(config, path=CONFIG_PATH):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {key: getattr(config, name) for name, key in _KEYS.items()}
+    if config.schedule is not None:
+        payload["schedule"] = config.schedule.to_json()
     temp = path.with_name(path.name + ".tmp")
     temp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     os.replace(temp, path)  # atomic: a crash mid-write cannot truncate the config

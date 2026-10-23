@@ -4,6 +4,7 @@ import pytest
 
 import session as session_module
 from config import RelaxConfig
+from schedule import RelaxSchedule
 from session import BREAK, IDLE, WAITING, RelaxSession
 
 
@@ -22,6 +23,11 @@ class Clock:
         """Time passes for the monotonic clock only -- what a suspended machine
         looks like if Windows keeps the counter running."""
         self.mono += seconds
+
+    def jump_wall(self, seconds):
+        """Time passes for the wall clock only -- a suspended machine whose
+        monotonic counter stopped, or the clock being set forward."""
+        self.wall += timedelta(seconds=seconds)
 
 
 @pytest.fixture
@@ -426,3 +432,65 @@ def test_settings_changed_while_idle_or_on_break_does_nothing(relax, clock):
     assert relax.state == BREAK
     relax.settings_changed()
     assert relax.state == BREAK
+
+
+# ---- schedule --------------------------------------------------------------
+# The clock starts on Wednesday 2026-08-12 at 09:00 UTC.
+
+
+@pytest.fixture
+def scheduled(clock, events):
+    return RelaxSession(monotonic=lambda: clock.mono, wall=lambda: clock.wall, tz=timezone.utc)
+
+
+def from_ten(**overrides):
+    return config(schedule=RelaxSchedule(active_start=10 * 60, active_end=18 * 60), **overrides)
+
+
+def test_schedule_holds_the_break_until_active_hours(scheduled, clock):
+    scheduled.start(from_ten())
+    assert scheduled.next_break == datetime(2026, 8, 12, 10, 1, 40, tzinfo=timezone.utc)
+    assert scheduled.remaining == 3700
+
+
+def test_next_break_is_none_during_a_break(scheduled, clock):
+    scheduled.start(config(schedule=RelaxSchedule()))
+    run_for(scheduled, clock, 100)
+    assert scheduled.state == BREAK
+    assert scheduled.next_break is None
+
+
+def test_posture_counts_from_the_last_interval_of_a_stretched_wait(scheduled, clock):
+    shown = []
+    scheduled.posture_due.connect(lambda: shown.append(clock.wall))
+    scheduled.start(from_ten(show_posture_reminder=True))
+    run_for(scheduled, clock, 3700, step=10)
+    # Halfway through the 100 s before the 10:01:40 break, not halfway through the hour.
+    assert shown == [datetime(2026, 8, 12, 10, 0, 50, tzinfo=timezone.utc)]
+
+
+def test_sleep_the_monotonic_clock_missed_still_counts(relax, clock):
+    relax.start(config())
+    run_for(relax, clock, 10)
+    clock.jump_wall(50)
+    relax.tick()
+    assert relax.state == WAITING
+    assert relax.remaining == 40
+
+
+def test_sleeping_past_the_break_starts_a_fresh_wait(relax, clock):
+    relax.start(config())
+    run_for(relax, clock, 10)
+    clock.jump_wall(7200)
+    relax.tick()
+    assert relax.state == WAITING
+    assert relax.remaining == 100
+
+
+def test_session_duration_leaves_out_blocked_time(scheduled, clock, events):
+    scheduled.start(from_ten())
+    clock.advance(5400)  # 09:00 -> 10:30, half of it before the active hours
+    scheduled.stop()
+    kind, _, fields = events[-1]
+    assert kind == "relax_session_ended"
+    assert fields["duration_seconds"] == 1800

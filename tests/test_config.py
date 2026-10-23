@@ -88,3 +88,31 @@ def test_tooltip_timer_stays_on_for_existing_configs(tmp_path):
 
 def test_usage_stats_default_on(tmp_path):
     assert config.load(tmp_path / "absent.json").send_usage_stats is True
+
+
+def test_schedule_round_trip_with_swift_shape(tmp_path):
+    from schedule import RelaxSchedule
+
+    path = tmp_path / "relax-config.json"
+    schedule = RelaxSchedule(weekdays={2, 3, 4, 5, 6}, active_start=540, active_end=1080, quiet_start=720, quiet_end=780)
+    config.save(RelaxConfig(schedule=schedule), path)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    assert raw["schedule"]["weekdays"] == [2, 3, 4, 5, 6]
+    assert raw["schedule"]["activeStart"] == 540
+    assert config.load(path).schedule == schedule
+
+
+def test_no_schedule_loads_as_none(tmp_path):
+    path = tmp_path / "relax-config.json"
+    config.save(RelaxConfig(), path)
+    assert config.load(path).schedule is None
+    path.write_text(json.dumps({"interval": 60}), encoding="utf-8")
+    assert config.load(path).schedule is None
+
+
+def test_bad_schedule_falls_back_to_none(tmp_path):
+    path = tmp_path / "relax-config.json"
+    path.write_text(json.dumps({"interval": 60, "schedule": {"weekdays": [], "activeStart": 0}}), encoding="utf-8")
+    loaded = config.load(path)
+    assert loaded.schedule is None
+    assert loaded.interval == 60
