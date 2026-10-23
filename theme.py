@@ -85,6 +85,13 @@ QLabel {
 }
 QLabel#secondary { color: $secondary; font-size: 11px; }
 QLabel#hint { color: $faint; font-size: 11px; }
+/* Segoe Fluent Icons ships with Windows 11, MDL2 Assets with Windows 10. */
+QLabel#info {
+    color: $secondary;
+    font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets";
+    font-weight: 400;
+    font-size: 10px;
+}
 QLabel#error { color: $danger; font-size: 10px; }
 QLabel#slash { color: $slash; }
 

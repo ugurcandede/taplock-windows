@@ -666,15 +666,11 @@ class Panel(QWidget):
         editor_layout.addLayout(days)
 
         self._hours_edit = self._range_edit("09:00-18:00")
-        hours = self._row("hours ⓘ", self._hours_edit)
-        hours.setToolTip(HOURS_INFO)
-        editor_layout.addWidget(hours)
+        editor_layout.addWidget(self._info_row("hours", HOURS_INFO, self._hours_edit))
 
         self._quiet_switch = _Switch()
         self._quiet_switch.toggled.connect(self._refresh_schedule)
-        quiet = self._row("quiet hours ⓘ", self._quiet_switch)
-        quiet.setToolTip(QUIET_INFO)
-        editor_layout.addWidget(quiet)
+        editor_layout.addWidget(self._info_row("quiet hours", QUIET_INFO, self._quiet_switch))
 
         self._quiet_edit = self._range_edit("12:00-13:00")
         self._quiet_row = self._row("from–to", self._quiet_edit)
@@ -683,9 +679,7 @@ class Panel(QWidget):
 
         self._align_switch = _Switch()
         self._align_switch.toggled.connect(self._refresh_schedule)
-        fixed = self._row("fixed break times ⓘ", self._align_switch)
-        fixed.setToolTip(FIXED_INFO)
-        editor_layout.addWidget(fixed)
+        editor_layout.addWidget(self._info_row("fixed break times", FIXED_INFO, self._align_switch))
 
         self._schedule_section = _Section("", editor)
         self._schedule_section.resized.connect(self._reflow)
@@ -706,6 +700,17 @@ class Panel(QWidget):
         layout.addWidget(_divider())
         block.hide()
         return block
+
+    def _info_row(self, caption, tooltip, widget):
+        """A settings row with an info icon after the caption. "ⓘ" has no glyph
+        in Segoe UI and fell back to a blurry bitmap font; the icon font's Info
+        glyph is drawn instead."""
+        row = self._row(caption, widget)
+        row.setToolTip(tooltip)
+        icon = QLabel("\ue946")
+        icon.setObjectName("info")
+        row.layout().insertWidget(1, icon)
+        return row
 
     def _range_edit(self, placeholder):
         edit = QLineEdit()
