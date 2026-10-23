@@ -188,6 +188,9 @@ class TrayApp:
             "posture": c.show_posture_reminder,
             "posture_interval_sec": c.posture_interval or 0,
             "resumed": self._resuming,
+            "schedule": c.schedule is not None,
+            "quiet": c.schedule is not None and c.schedule.quiet_start is not None,
+            "align": c.schedule is not None and c.schedule.align_to_clock,
         })
 
     def _track_relax_end(self):

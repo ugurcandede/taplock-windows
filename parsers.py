@@ -67,8 +67,12 @@ def format_countdown(seconds):
 
 
 def format_mmss(seconds):
-    """Panel countdown: always `M:SS`, even under a minute."""
-    minutes, secs = divmod(max(0, seconds), 60)
+    """Panel countdown: always `M:SS`, even under a minute; `H:MM:SS` from an
+    hour up, which a schedule's overnight wait reaches."""
+    seconds = max(0, seconds)
+    if seconds >= 3600:
+        return f"{seconds // 3600}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
+    minutes, secs = divmod(seconds, 60)
     return f"{minutes}:{secs:02d}"
 
 
@@ -108,3 +112,31 @@ def parse_color(text):
 def rgb255(rgb):
     """0.0-1.0 triple -> 0-255 ints, for Qt and Pillow."""
     return tuple(round(c * 255) for c in rgb)
+
+
+def parse_time_range(text):
+    """`HH:MM-HH:MM` (or `H-H`) -> (start, end) minutes from midnight, or None.
+    The range can't cross midnight; the end may be 24:00. Same rules as the
+    Swift `parseTimeRange`."""
+    parts = text.split("-")
+    if len(parts) != 2:
+        return None
+    start, end = _clock_minutes(parts[0]), _clock_minutes(parts[1])
+    if start is None or end is None or start >= end:
+        return None
+    return start, end
+
+
+def _clock_minutes(text):
+    hm = text.strip().split(":")
+    if len(hm) > 2 or not hm[0].isdigit() or (len(hm) == 2 and not (len(hm[1]) == 2 and hm[1].isdigit())):
+        return None
+    hour, minute = int(hm[0]), int(hm[1]) if len(hm) == 2 else 0
+    if minute >= 60 or hour * 60 + minute > 24 * 60:
+        return None
+    return hour * 60 + minute
+
+
+def format_time_range(start, end):
+    """Inverse of parse_time_range: minutes -> `HH:MM-HH:MM`."""
+    return f"{start // 60:02d}:{start % 60:02d}-{end // 60:02d}:{end % 60:02d}"

@@ -5,13 +5,13 @@ would give the transient dismiss behaviour for free, but keyboard focus inside a
 popup is unreliable and this panel holds text fields, so it hides on
 `WindowDeactivate` instead.
 
-Two layouts share the card: the idle form (interval / break / presets / start /
-stats) and the running view (countdown / break now / restart / skip / stop),
+Two layouts share the card: the idle form (interval / break / advanced
+schedule / start / presets / stats) and the running view (countdown / break now / restart / skip / stop),
 swapped from the session's `state_changed`. Settings sit below both, so they can
 be changed mid-session; the session reads the same config object.
 """
 
-from PySide6.QtCore import QEasingCurve, QEvent, QRect, QRectF, Qt, QUrl, QVariantAnimation, Signal
+from PySide6.QtCore import QEasingCurve, QEvent, QLocale, QRect, QRectF, Qt, QTime, QUrl, QVariantAnimation, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QGuiApplication, QIntValidator, QPainter
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import analytics
 import config
@@ -41,9 +41,12 @@ from parsers import (
     best_unit,
     format_duration,
     format_mmss,
+    format_time_range,
     parse_color,
+    parse_time_range,
     rgb255,
 )
+from schedule import RelaxSchedule
 import version
 from theme import DARK, LIGHT
 
@@ -68,6 +71,20 @@ LOGO_PX = 12
 SETTINGS_ROW_HEIGHT = 26
 SETTINGS_ROW_SPACING = 4
 
+# Advanced schedule. Monday-first display order of the Swift weekday numbers the
+# config uses (1 = Sunday ... 7 = Saturday).
+WEEKDAY_ORDER = (2, 3, 4, 5, 6, 7, 1)
+WORKDAYS = {2, 3, 4, 5, 6}
+HOURS_INFO = (
+    "Breaks only happen between these times. Outside them the timer waits, "
+    "and starts counting again when they begin."
+)
+QUIET_INFO = "No breaks in this window, e.g. lunch. The timer starts counting again when it ends."
+FIXED_INFO = (
+    "Breaks land on the same clock times every day, counted from the start of your hours "
+    "(50/10 → 9:50, 10:50, 11:50), instead of from when you press start."
+)
+
 
 def _mono(pixel_size, weight=QFont.Weight.DemiBold):
     """Cascadia Mono ships with Windows 11 / Terminal; Consolas is the fallback."""
@@ -91,6 +108,32 @@ def _caption(text):
     return label
 
 
+def _day_name(day, format_type):
+    """Locale day name of a Swift weekday number; Qt counts 1 = Monday."""
+    return QLocale.system().dayName((day + 5) % 7 + 1, format_type)
+
+
+def _clock(moment):
+    """Local short time of an instant, with the day name when it isn't today."""
+    local = moment.astimezone()
+    text = QLocale.system().toString(QTime(local.hour, local.minute), QLocale.ShortFormat)
+    if local.date() != datetime.now().date():
+        text = f"{_day_name(local.isoweekday() % 7 + 1, QLocale.ShortFormat)} {text}"
+    return text
+
+
+def _days_text(days):
+    if days == set(range(1, 8)):
+        return "every day"
+    if days == WORKDAYS:
+        return "weekdays"
+    if days == {1, 7}:
+        return "weekends"
+    if not days:
+        return "no days"
+    return " ".join(_day_name(d, QLocale.ShortFormat) for d in WEEKDAY_ORDER if d in days)
+
+
 class _DisclosureRow(QWidget):
     """Label left, chevron right, whole row clickable -- a plain QPushButton
     centres its text and cannot separate the two."""
@@ -102,10 +145,14 @@ class _DisclosureRow(QWidget):
         self.setCursor(Qt.PointingHandCursor)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(SIDE_PADDING, 8, SIDE_PADDING, 8)
-        layout.addWidget(_caption(text))
+        self._label = _caption(text)
+        layout.addWidget(self._label)
         layout.addStretch()
         self._chevron = _caption("›")
         layout.addWidget(self._chevron)
+
+    def set_text(self, text):
+        self._label.setText(text)
 
     def set_open(self, is_open):
         self._chevron.setText("⌄" if is_open else "›")
@@ -148,6 +195,9 @@ class _Section(QWidget):
     @property
     def is_open(self):
         return self._open
+
+    def set_caption(self, text):
+        self._row.set_text(text)
 
     def toggle(self):
         self._open = not self._open
@@ -270,6 +320,8 @@ class _UnitPicker(QWidget):
     background on each, so it can slide from one to the next.
     """
 
+    changed = Signal()
+
     def __init__(self, caption):
         super().__init__()
         self._slide_x = None  # until the first move, follow the checked button
@@ -303,6 +355,7 @@ class _UnitPicker(QWidget):
         self._anim.setEasingCurve(QEasingCurve.InOutQuad)
         self._anim.valueChanged.connect(self._on_slide)
         self._group.buttonClicked.connect(lambda _: self._slide_to_checked())
+        self._group.buttonClicked.connect(lambda _: self.changed.emit())
 
         self.set_unit("m")
 
@@ -465,8 +518,14 @@ class Panel(QWidget):
 
         form = QWidget()
         form_layout = QVBoxLayout(form)
-        form_layout.setContentsMargins(SIDE_PADDING, 6, SIDE_PADDING, 10)
+        form_layout.setContentsMargins(SIDE_PADDING, 6, SIDE_PADDING, 0)
         form_layout.setSpacing(8)
+
+        self._advanced_switch = _Switch()
+        self._advanced_switch.toggled.connect(self._show_schedule)
+        advanced = self._row("advanced", self._advanced_switch)
+        advanced.setToolTip("Active days and hours, quiet hours, fixed break times")
+        form_layout.addWidget(advanced)
 
         entry = QHBoxLayout()
         entry.setSpacing(4)
@@ -489,6 +548,21 @@ class Panel(QWidget):
         units.addWidget(self._interval_unit)
         units.addWidget(self._break_unit)
         form_layout.addLayout(units)
+        for edit in (self._interval_edit, self._break_edit):
+            edit.textChanged.connect(self._refresh_schedule)
+        for picker in (self._interval_unit, self._break_unit):
+            picker.changed.connect(self._refresh_schedule)
+        layout.addWidget(form)
+
+        # Between the durations and start, like the macOS popover; hidden unless
+        # advanced is on, so the plain form looks as it always has.
+        self._schedule_block = self._build_schedule()
+        layout.addWidget(self._schedule_block)
+
+        form = QWidget()
+        form_layout = QVBoxLayout(form)
+        form_layout.setContentsMargins(SIDE_PADDING, 8, SIDE_PADDING, 10)
+        form_layout.setSpacing(8)
 
         start = QPushButton("start")
         start.setObjectName("primary")
@@ -518,6 +592,152 @@ class Panel(QWidget):
         layout.addWidget(self._stats_section)
 
         return page
+
+    def _build_schedule(self):
+        """Collapsed to a summary ("weekdays · 09:00–18:00 · quiet · fixed") with
+        the upcoming break times under it; the summary opens the editor. The
+        preview is the main way the rules explain themselves."""
+        block = QWidget()
+        layout = QVBoxLayout(block)
+        layout.setContentsMargins(0, 8, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(_divider())
+
+        editor = QWidget()
+        editor_layout = QVBoxLayout(editor)
+        editor_layout.setContentsMargins(SIDE_PADDING, 0, SIDE_PADDING, 4)
+        editor_layout.setSpacing(SETTINGS_ROW_SPACING)
+
+        days = QHBoxLayout()
+        days.setSpacing(2)
+        self._day_chips = {}
+        for day in WEEKDAY_ORDER:
+            chip = QPushButton(_day_name(day, QLocale.ShortFormat))
+            chip.setObjectName("unit")
+            chip.setCheckable(True)
+            chip.setFocusPolicy(Qt.NoFocus)
+            chip.setCursor(Qt.PointingHandCursor)
+            chip.toggled.connect(self._refresh_schedule)
+            days.addWidget(chip)
+            self._day_chips[day] = chip
+        editor_layout.addLayout(days)
+
+        self._hours_edit = self._range_edit("09:00-18:00")
+        hours = self._row("hours ⓘ", self._hours_edit)
+        hours.setToolTip(HOURS_INFO)
+        editor_layout.addWidget(hours)
+
+        self._quiet_switch = _Switch()
+        self._quiet_switch.toggled.connect(self._refresh_schedule)
+        quiet = self._row("quiet hours ⓘ", self._quiet_switch)
+        quiet.setToolTip(QUIET_INFO)
+        editor_layout.addWidget(quiet)
+
+        self._quiet_edit = self._range_edit("12:00-13:00")
+        self._quiet_row = self._row("from–to", self._quiet_edit)
+        self._quiet_row.layout().setContentsMargins(12, 0, 0, 0)
+        editor_layout.addWidget(self._quiet_row)
+
+        self._align_switch = _Switch()
+        self._align_switch.toggled.connect(self._refresh_schedule)
+        fixed = self._row("fixed break times ⓘ", self._align_switch)
+        fixed.setToolTip(FIXED_INFO)
+        editor_layout.addWidget(fixed)
+
+        self._schedule_section = _Section("", editor)
+        self._schedule_section.resized.connect(self._reflow)
+        layout.addWidget(self._schedule_section)
+
+        self._schedule_preview = QLabel()
+        self._schedule_preview.setObjectName("hint")
+        self._schedule_preview.setFont(_mono(10, QFont.Weight.Normal))
+        self._schedule_preview.setContentsMargins(SIDE_PADDING, 0, SIDE_PADDING, 8)
+        layout.addWidget(self._schedule_preview)
+
+        self._schedule_error = QLabel()
+        self._schedule_error.setObjectName("error")
+        self._schedule_error.setWordWrap(True)
+        self._schedule_error.setContentsMargins(SIDE_PADDING, 0, SIDE_PADDING, 8)
+        layout.addWidget(self._schedule_error)
+
+        layout.addWidget(_divider())
+        block.hide()
+        return block
+
+    def _range_edit(self, placeholder):
+        edit = QLineEdit()
+        edit.setObjectName("setting")
+        edit.setPlaceholderText(placeholder)
+        edit.setFixedWidth(96)
+        edit.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        edit.setFocusPolicy(Qt.ClickFocus)
+        edit.textChanged.connect(self._refresh_schedule)
+        return edit
+
+    def _show_schedule(self, visible):
+        self._schedule_block.setVisible(visible)
+        self._refresh_schedule()
+        self._reflow()
+
+    def _form_schedule(self):
+        """(schedule, error) from the form; (None, None) while advanced is off."""
+        if not self._advanced_switch.isChecked():
+            return None, None
+        hours = parse_time_range(self._hours_edit.text())
+        if hours is None:
+            return None, "Hours must look like 09:00-18:00, within one day"
+        quiet = (None, None)
+        if self._quiet_switch.isChecked():
+            quiet = parse_time_range(self._quiet_edit.text())
+            if quiet is None:
+                return None, "Quiet hours must look like 12:00-13:00, within one day"
+        schedule = RelaxSchedule(
+            weekdays={day for day, chip in self._day_chips.items() if chip.isChecked()},
+            active_start=hours[0],
+            active_end=hours[1],
+            quiet_start=quiet[0],
+            quiet_end=quiet[1],
+            align_to_clock=self._align_switch.isChecked(),
+        )
+        return schedule, schedule.validation_error()
+
+    def _refresh_schedule(self):
+        """Summary, preview and quiet row after any change to the form."""
+        if self._loading:
+            return
+        self._quiet_row.setVisible(self._quiet_switch.isChecked())
+
+        days = {day for day, chip in self._day_chips.items() if chip.isChecked()}
+        parts = [_days_text(days), self._hours_edit.text().strip().replace("-", "–")]
+        if self._quiet_switch.isChecked():
+            parts.append("quiet")
+        if self._align_switch.isChecked():
+            parts.append("fixed")
+        self._schedule_section.set_caption(" · ".join(parts))
+
+        schedule, error = self._form_schedule()
+        preview = ""
+        interval = self._seconds(self._interval_edit, self._interval_unit)
+        break_duration = self._seconds(self._break_edit, self._break_unit)
+        if schedule is not None and error is None and interval and break_duration:
+            breaks = []
+            moment = datetime.now(timezone.utc)
+            while len(breaks) < 3:
+                moment = schedule.next_break(moment, interval, break_duration)
+                if moment is None:
+                    break
+                breaks.append(moment)
+                moment += timedelta(seconds=break_duration)
+            if breaks:
+                preview = "breaks: " + " · ".join(_clock(b) for b in breaks) + " …"
+            else:
+                error = "no breaks with these settings"
+        self._schedule_preview.setText(preview)
+        self._schedule_preview.setVisible(bool(preview))
+        self._schedule_error.setText((error or "").lower())
+        self._schedule_error.setVisible(bool(error))
+        if self._schedule_block.isVisible():
+            self._reflow()
 
     def _build_stats(self):
         page = QWidget()
@@ -757,6 +977,7 @@ class Panel(QWidget):
         self._phase = QLabel()
         self._phase.setObjectName("secondary")
         self._phase.setAlignment(Qt.AlignCenter)
+        self._phase.setWordWrap(True)  # "paused until … · next break …" can need two lines
         layout.addWidget(self._phase)
 
         layout.addSpacing(6)
@@ -775,6 +996,8 @@ class Panel(QWidget):
             button.setCursor(Qt.PointingHandCursor)
             button.clicked.connect(slot)
             actions.addWidget(button)
+        # With fixed break times a restart lands on the same grid point; hidden then.
+        self._restart_button = button
         layout.addWidget(self._waiting_actions)
 
         self._skip = QPushButton("skip")
@@ -842,7 +1065,18 @@ class Panel(QWidget):
         self._show_posture_every(self._config.show_posture_reminder)
         self._launch_switch.setChecked(startup.is_enabled())
         self._resume_switch.setChecked(self._config.resume_on_launch)
+
+        schedule = self._config.schedule
+        self._advanced_switch.setChecked(schedule is not None)
+        shown = schedule or RelaxSchedule(weekdays=WORKDAYS, active_start=9 * 60, active_end=18 * 60)
+        for day, chip in self._day_chips.items():
+            chip.setChecked(day in shown.weekdays)
+        self._hours_edit.setText(format_time_range(shown.active_start, shown.active_end))
+        self._quiet_switch.setChecked(shown.quiet_start is not None)
+        self._quiet_edit.setText(format_time_range(shown.quiet_start or 12 * 60, shown.quiet_end or 13 * 60))
+        self._align_switch.setChecked(shown.align_to_clock)
         self._loading = False
+        self._show_schedule(schedule is not None)
 
     def _save_settings(self):
         """macOS only persists on start, so settings changed without starting a
@@ -904,7 +1138,8 @@ class Panel(QWidget):
     def _restart_countdown(self):
         config_ = self._session.config
         if config_ is not None:
-            analytics.track("relax_restart", {"elapsed_sec": config_.interval - self._session.remaining})
+            # A schedule can hold the wait longer than the interval; don't report negative time.
+            analytics.track("relax_restart", {"elapsed_sec": max(0, config_.interval - self._session.remaining)})
         self._session.restart_countdown()
 
     # ---- update banner ---------------------------------------------------
@@ -987,10 +1222,18 @@ class Panel(QWidget):
         if interval <= break_duration:
             analytics.track("relax_error", {"reason": "interval_not_longer"})
             return self._set_error("Interval must be longer than break")
+        schedule, error = self._form_schedule()
+        if error:
+            analytics.track("relax_error", {"reason": "invalid_schedule"})
+            return self._set_error(error)
+        if schedule is not None and schedule.next_break(datetime.now(timezone.utc), interval, break_duration) is None:
+            analytics.track("relax_error", {"reason": "no_breaks"})
+            return self._set_error("No breaks with these settings")
 
         self._set_error(None)
         self._config.interval = interval
         self._config.break_duration = break_duration
+        self._config.schedule = schedule
         config.save(self._config)
         self._session.start(self._config)
         # macOS closes the popover here. Not done on Windows: pressing start and
@@ -1010,7 +1253,7 @@ class Panel(QWidget):
 
         if running:
             self._countdown.setText(format_mmss(self._session.remaining))
-            self._phase.setText("break time!" if on_break else "next break in...")
+            self._phase.setText(self._phase_text())
 
         key = (running, on_break)
         if key == self._layout_key:
@@ -1021,10 +1264,26 @@ class Panel(QWidget):
         self._active.setVisible(running)
         self._skip.setVisible(on_break)
         self._waiting_actions.setVisible(running and not on_break)
+        schedule = self._session.config.schedule if running else None
+        self._restart_button.setVisible(schedule is None or not schedule.align_to_clock)
         self._render_banner()
         if not running:
             self._set_error(None)
         self._reflow()
+
+    def _phase_text(self):
+        """Under the countdown. With a schedule it names the break time, and says
+        "paused" while the schedule holds breaks back (off days, outside hours,
+        quiet hours)."""
+        if self._session.on_break:
+            return "break time!"
+        upcoming = self._session.next_break
+        interval = timedelta(seconds=self._session.config.interval)
+        if self._session.config.schedule is None or upcoming is None:
+            return "next break in..."
+        if upcoming - datetime.now(timezone.utc) > interval:
+            return f"paused until {_clock(upcoming - interval)} · next break {_clock(upcoming)}"
+        return f"next break at {_clock(upcoming)}"
 
     def _fit(self):
         # Hiding a page only posts a LayoutRequest, which is handled on the next
@@ -1063,6 +1322,8 @@ class Panel(QWidget):
             self._banner_tracked_version = self._update.version
             analytics.track("update_banner_shown", {"latest_version": self._update.version})
         self._anchor = anchor
+        if not self._session.running:
+            self._refresh_schedule()  # the preview's times move with the clock
         self._fit()
         self._place()
         self.show()
