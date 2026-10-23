@@ -186,15 +186,33 @@ class _Reveal(QWidget):
         self._anim.valueChanged.connect(self._step)
         self._anim.finished.connect(self._settled)
 
+    @property
+    def animating(self):
+        return self._anim.state() == QAbstractAnimation.Running
+
+    def _page_height(self, width):
+        # Word-wrapped labels (the phase line, the schedule error) need the
+        # height for the actual width; their plain size hint is one line.
+        if self._page.hasHeightForWidth():
+            return self._page.heightForWidth(width)
+        return self._page.sizeHint().height()
+
+    def _width(self):
+        # Never laid out while hidden; the parent is the closest real width.
+        return self.width() if self.isVisible() else self.parentWidget().width()
+
     def sizeHint(self):
-        page = self._page.sizeHint()
-        return QSize(page.width(), page.height() if self._height is None else self._height)
+        if self._height is None:
+            height = self._page_height(self._width())
+        else:
+            height = self._height
+        return QSize(self._page.sizeHint().width(), height)
 
     def minimumSizeHint(self):
         return self.sizeHint()
 
     def resizeEvent(self, event):
-        self._page.setGeometry(0, 0, self.width(), self._page.sizeHint().height())
+        self._page.setGeometry(0, 0, self.width(), self._page_height(self.width()))
 
     def set_open(self, is_open, animate=True):
         if not animate:
@@ -209,13 +227,13 @@ class _Reveal(QWidget):
         self.show()
         self._anim.stop()
         self._anim.setStartValue(start)
-        self._anim.setEndValue(self._page.sizeHint().height() if is_open else 0)
+        self._anim.setEndValue(self._page_height(self._width()) if is_open else 0)
         self._anim.start()
 
     def _step(self, height):
         # Setting the end value on a stopped animation reports it straight away,
         # which would show the end state for a frame before the slide starts.
-        if self._anim.state() != QAbstractAnimation.Running:
+        if not self.animating:
             return
         self._height = int(height)
         self.updateGeometry()
@@ -497,19 +515,20 @@ class Panel(QWidget):
         body.setContentsMargins(0, 10, 0, 4)
         body.setSpacing(0)
 
-        body.addWidget(self._build_update_banner())
+        self._banner_reveal = self._revealed(self._build_update_banner())
+        body.addWidget(self._banner_reveal)
 
         self._error = QLabel()
         self._error.setObjectName("error")
         self._error.setAlignment(Qt.AlignCenter)
-        self._error.hide()
-        body.addWidget(self._error)
+        self._error_reveal = self._revealed(self._error)
+        body.addWidget(self._error_reveal)
 
-        self._idle = self._build_idle()
-        body.addWidget(self._idle)
-
-        self._active = self._build_active()
-        body.addWidget(self._active)
+        # Start and stop slide one view shut as the other opens.
+        self._idle_reveal = self._revealed(self._build_idle())
+        body.addWidget(self._idle_reveal)
+        self._active_reveal = self._revealed(self._build_active())
+        body.addWidget(self._active_reveal)
 
         body.addWidget(_divider())
 
@@ -550,7 +569,6 @@ class Panel(QWidget):
             button.setCursor(Qt.PointingHandCursor)
             button.clicked.connect(slot)
             row.addWidget(button)
-        self._banner.hide()
         return self._banner
 
     def _build_idle(self):
@@ -600,7 +618,8 @@ class Panel(QWidget):
         # Between the durations and start, like the macOS popover; hidden unless
         # advanced is on, so the plain form looks as it always has.
         self._schedule_block = self._build_schedule()
-        layout.addWidget(self._schedule_block)
+        self._schedule_reveal = self._revealed(self._schedule_block)
+        layout.addWidget(self._schedule_reveal)
 
         form = QWidget()
         form_layout = QVBoxLayout(form)
@@ -629,7 +648,8 @@ class Panel(QWidget):
         layout.addWidget(_divider())
 
         self._stats_section = _Section("stats", self._build_stats())
-        self._stats_section.opened.connect(self._refresh_stats)
+        # Opening measures the page right after this, so no slide inside it.
+        self._stats_section.opened.connect(lambda: self._refresh_stats(animate=False))
         self._stats_section.opened.connect(lambda: analytics.track("stats_opened", {"mode": "relax"}))
         self._stats_section.resized.connect(self._reflow)
         layout.addWidget(self._stats_section)
@@ -675,7 +695,8 @@ class Panel(QWidget):
         self._quiet_edit = self._range_edit("12:00-13:00")
         self._quiet_row = self._row("from–to", self._quiet_edit)
         self._quiet_row.layout().setContentsMargins(12, 0, 0, 0)
-        editor_layout.addWidget(self._quiet_row)
+        self._quiet_reveal = self._revealed(self._quiet_row)
+        editor_layout.addWidget(self._quiet_reveal)
 
         self._align_switch = _Switch()
         self._align_switch.toggled.connect(self._refresh_schedule)
@@ -689,17 +710,23 @@ class Panel(QWidget):
         self._schedule_preview.setObjectName("hint")
         self._schedule_preview.setFont(_mono(10, QFont.Weight.Normal))
         self._schedule_preview.setContentsMargins(SIDE_PADDING, 0, SIDE_PADDING, 8)
-        layout.addWidget(self._schedule_preview)
+        self._schedule_preview_reveal = self._revealed(self._schedule_preview)
+        layout.addWidget(self._schedule_preview_reveal)
 
         self._schedule_error = QLabel()
         self._schedule_error.setObjectName("error")
         self._schedule_error.setWordWrap(True)
         self._schedule_error.setContentsMargins(SIDE_PADDING, 0, SIDE_PADDING, 8)
-        layout.addWidget(self._schedule_error)
+        self._schedule_error_reveal = self._revealed(self._schedule_error)
+        layout.addWidget(self._schedule_error_reveal)
 
         layout.addWidget(_divider())
-        block.hide()
         return block
+
+    def _revealed(self, widget):
+        reveal = _Reveal(widget)
+        reveal.resized.connect(self._reflow)
+        return reveal
 
     def _info_row(self, caption, tooltip, widget):
         """A settings row with an info icon after the caption. "ⓘ" has no glyph
@@ -722,10 +749,9 @@ class Panel(QWidget):
         edit.textChanged.connect(self._refresh_schedule)
         return edit
 
-    def _show_schedule(self, visible):
-        self._schedule_block.setVisible(visible)
+    def _show_schedule(self, visible, animate=True):
+        self._schedule_reveal.set_open(visible, animate)
         self._refresh_schedule()
-        self._reflow()
 
     def _form_schedule(self):
         """(schedule, error) from the form; (None, None) while advanced is off."""
@@ -753,7 +779,7 @@ class Panel(QWidget):
         """Summary, preview and quiet row after any change to the form."""
         if self._loading:
             return
-        self._quiet_row.setVisible(self._quiet_switch.isChecked())
+        self._quiet_reveal.set_open(self._quiet_switch.isChecked())
 
         days = {day for day, chip in self._day_chips.items() if chip.isChecked()}
         parts = [_days_text(days), self._hours_edit.text().strip().replace("-", "–")]
@@ -780,10 +806,14 @@ class Panel(QWidget):
                 preview = "breaks: " + " · ".join(_clock(b) for b in breaks) + " …"
             else:
                 error = "no breaks with these settings"
-        self._schedule_preview.setText(preview)
-        self._schedule_preview.setVisible(bool(preview))
-        self._schedule_error.setText((error or "").lower())
-        self._schedule_error.setVisible(bool(error))
+        # Text is only replaced, never cleared, so a closing line slides out
+        # with what it said.
+        if preview:
+            self._schedule_preview.setText(preview)
+        self._schedule_preview_reveal.set_open(bool(preview))
+        if error:
+            self._schedule_error.setText(error.lower())
+        self._schedule_error_reveal.set_open(bool(error))
         if self._schedule_block.isVisible():
             self._reflow()
 
@@ -798,7 +828,7 @@ class Panel(QWidget):
             self._period.addItem(stats.PERIOD_LABELS[kind], kind)
         self._period.setFocusPolicy(Qt.NoFocus)
         self._period.setCursor(Qt.PointingHandCursor)
-        self._period.currentIndexChanged.connect(self._refresh_stats)
+        self._period.currentIndexChanged.connect(lambda _: self._refresh_stats())
         self._period.currentIndexChanged.connect(
             lambda _: analytics.track("stats_period_changed", {"period": self._period.currentData()})
         )
@@ -818,7 +848,8 @@ class Panel(QWidget):
             row = self._row(caption, value)
             # The macOS dropdown only shows this one once something was skipped.
             if key == "skipped":
-                self._skipped_row = row
+                self._skipped_reveal = self._revealed(row)
+                row = self._skipped_reveal
             layout.addWidget(row)
 
         view_all = QPushButton("view all statistics  ↗")
@@ -830,7 +861,7 @@ class Panel(QWidget):
 
         return page
 
-    def _refresh_stats(self):
+    def _refresh_stats(self, animate=True):
         interval = stats.resolve_period(self._period.currentData(), datetime.now().astimezone())
         summary = stats.summarise(stats.events_in(stats.read_all(), interval))
         self._metrics["sessions"].setText(str(summary.sessions))
@@ -838,7 +869,7 @@ class Panel(QWidget):
         self._metrics["breaks"].setText(str(summary.breaks))
         self._metrics["break_time"].setText(format_duration(summary.break_seconds))
         self._metrics["skipped"].setText(str(summary.skipped_early))
-        self._skipped_row.setVisible(bool(summary.skipped_early))
+        self._skipped_reveal.set_open(bool(summary.skipped_early), animate)
 
     def _duration_edit(self, width, alignment):
         edit = _CountingEdit()
@@ -921,7 +952,8 @@ class Panel(QWidget):
         self._posture_every_row = self._row("every", self._posture_every, _caption("min"))
         self._posture_every_row.layout().setContentsMargins(12, 0, 0, 0)
         self._posture_switch.toggled.connect(self._show_posture_every)
-        layout.addWidget(self._posture_every_row)
+        self._posture_every_reveal = self._revealed(self._posture_every_row)
+        layout.addWidget(self._posture_every_reveal)
 
         layout.addWidget(_divider())
 
@@ -998,9 +1030,8 @@ class Panel(QWidget):
             self._posture_switch,
         )
 
-    def _show_posture_every(self, visible):
-        self._posture_every_row.setVisible(visible)
-        self._reflow()
+    def _show_posture_every(self, visible, animate=True):
+        self._posture_every_reveal.set_open(visible, animate)
 
     def _preview_button(self, tooltip, slot):
         button = QPushButton("preview")
@@ -1110,7 +1141,7 @@ class Panel(QWidget):
         self._posture_switch.setChecked(self._config.show_posture_reminder)
         every = self._config.posture_interval
         self._posture_every.setText(str(every // 60) if every else "")
-        self._show_posture_every(self._config.show_posture_reminder)
+        self._show_posture_every(self._config.show_posture_reminder, animate=False)
         self._launch_switch.setChecked(startup.is_enabled())
         self._resume_switch.setChecked(self._config.resume_on_launch)
 
@@ -1124,7 +1155,8 @@ class Panel(QWidget):
         self._quiet_edit.setText(format_time_range(shown.quiet_start or 12 * 60, shown.quiet_end or 13 * 60))
         self._align_switch.setChecked(shown.align_to_clock)
         self._loading = False
-        self._show_schedule(schedule is not None)
+        self._quiet_reveal.set_open(self._quiet_switch.isChecked(), animate=False)
+        self._show_schedule(schedule is not None, animate=False)
 
     def _save_settings(self):
         """macOS only persists on start, so settings changed without starting a
@@ -1197,9 +1229,8 @@ class Panel(QWidget):
             return  # a daily re-check must not reset a download in flight
         self._update = update
         self._update_state = "idle"
-        self._banner.setVisible(update is not None)
         self._render_banner()
-        self._reflow()
+        self._banner_reveal.set_open(update is not None, animate=self.isVisible())
 
     def set_update_failed(self):
         analytics.track("update_failed", {"latest_version": self._update.version, "reason": "exe_swap"})
@@ -1290,8 +1321,9 @@ class Panel(QWidget):
         # elsewhere like any other transient popup.
 
     def _set_error(self, message):
-        self._error.setText(message or "")
-        self._error.setVisible(bool(message))
+        if message:
+            self._error.setText(message)
+        self._error_reveal.set_open(bool(message))
 
     # ---- refresh ---------------------------------------------------------
 
@@ -1306,14 +1338,16 @@ class Panel(QWidget):
         key = (running, on_break)
         if key == self._layout_key:
             return  # countdown text only; leave geometry alone
+        first = self._layout_key is None
         self._layout_key = key
 
-        self._idle.setVisible(not running)
-        self._active.setVisible(running)
         self._skip.setVisible(on_break)
         self._waiting_actions.setVisible(running and not on_break)
         schedule = self._session.config.schedule if running else None
         self._restart_button.setVisible(schedule is None or not schedule.align_to_clock)
+        # After the contents above, so the slide measures the view as it will be.
+        self._idle_reveal.set_open(not running, animate=not first)
+        self._active_reveal.set_open(running, animate=not first)
         self._render_banner()
         if not running:
             self._set_error(None)
