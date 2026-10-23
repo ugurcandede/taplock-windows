@@ -11,7 +11,7 @@ swapped from the session's `state_changed`. Settings sit below both, so they can
 be changed mid-session; the session reads the same config object.
 """
 
-from PySide6.QtCore import QEasingCurve, QEvent, QLocale, QRect, QRectF, Qt, QTime, QUrl, QVariantAnimation, Signal
+from PySide6.QtCore import QEasingCurve, QEvent, QLocale, QPoint, QRect, QRectF, Qt, QTime, QUrl, QVariantAnimation, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QGuiApplication, QIntValidator, QPainter
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QLineEdit,
     QPushButton,
     QVBoxLayout,
@@ -444,6 +445,9 @@ class Panel(QWidget):
     def _build(self):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(SHADOW_MARGIN, SHADOW_MARGIN, SHADOW_MARGIN, SHADOW_MARGIN)
+        # Only _reflow sizes the window. The default constraint also resized it
+        # whenever the layout changed, as a second, unpositioned update.
+        outer.setSizeConstraint(QLayout.SetNoConstraint)
 
         card = QWidget()
         self._card = card
@@ -1290,27 +1294,28 @@ class Panel(QWidget):
             return f"paused until {_clock(upcoming - interval)} · next break {_clock(upcoming)}"
         return f"next break at {_clock(upcoming)}"
 
-    def _fit(self):
+    def _reflow(self):
+        """Lay the panel out for its content and put it against the anchor.
+
+        Size and position go in one setGeometry. As adjustSize() then move() they
+        were two window updates, and Windows could show the frame in between --
+        new size, old position -- which flickered every frame of an animation.
+        """
         # Hiding a page only posts a LayoutRequest, which is handled on the next
         # event-loop pass -- until then both pages are still in the size hint and
-        # adjustSize() would size the window to their sum. Invalidating the card
-        # layout first drops those cached hints so the resize is correct in the
-        # same call, with no intermediate frame at the wrong height.
+        # the window would be sized to their sum. Invalidating the card layout
+        # first drops those cached hints so the size is correct in the same call,
+        # with no intermediate frame at the wrong height. A row shown or hidden
+        # deeper down (quiet hours) is only picked up one nesting level per pass,
+        # so every nested widget drops its cached size hint as well.
+        for widget in self.findChildren(QWidget):
+            if widget.layout() is not None:
+                widget.updateGeometry()
         for layout in (self._card.layout(), self.layout()):
             layout.invalidate()
             layout.activate()
-        # The layout's default size constraint pushes its minimum onto the
-        # window, and Qt will not lower a minimum once it has been set. After the
-        # panel had been shown with settings expanded, that minimum stayed at the
-        # expanded height and adjustSize() could no longer shrink past it --
-        # collapsing left the window its old size. Clearing it first is the fix.
-        self.setMinimumSize(0, 0)
-        self.adjustSize()
-
-    def _reflow(self):
-        self._fit()
-        if self.isVisible():
-            self._place()
+        size = self.sizeHint()
+        self.setGeometry(QRect(self._position(size), size))
 
     # ---- show / hide -----------------------------------------------------
 
@@ -1329,15 +1334,13 @@ class Panel(QWidget):
         self._anchor = anchor
         if not self._session.running:
             self._refresh_schedule()  # the preview's times move with the clock
-        self._fit()
-        self._place()
+        self._reflow()
         self.show()
         self.raise_()
         self.activateWindow()
 
-    def _place(self):
-        """Position against the anchor. Separate from `show_at` so the resize
-        animation can reposition every frame without re-raising the window."""
+    def _position(self, size):
+        """Top-left for a window of `size` against the anchor."""
         anchor = self._anchor
         screen = QGuiApplication.screenAt(anchor.center()) if not anchor.isEmpty() else None
         screen = screen or QGuiApplication.primaryScreen()
@@ -1346,21 +1349,17 @@ class Panel(QWidget):
         if anchor.isEmpty():
             # Icon is hidden in the tray overflow flyout and reports no geometry;
             # fall back to the corner the tray normally lives in.
-            x = area.right() - self.width()
-            y = area.bottom() - self.height()
+            x = area.right() - size.width()
+            y = area.bottom() - size.height()
         else:
-            x = anchor.center().x() - self.width() // 2
-            y = anchor.top() - self.height() + SHADOW_MARGIN - ANCHOR_GAP
+            x = anchor.center().x() - size.width() // 2
+            y = anchor.top() - size.height() + SHADOW_MARGIN - ANCHOR_GAP
             if y < area.top():  # taskbar docked to the top edge
                 y = anchor.bottom() - SHADOW_MARGIN + ANCHOR_GAP
 
-        x = max(area.left(), min(x, area.right() - self.width()))
-        y = max(area.top(), min(y, area.bottom() - self.height()))
-        self.move(x, y)
-
-        self.show()
-        self.raise_()
-        self.activateWindow()
+        x = max(area.left(), min(x, area.right() - size.width()))
+        y = max(area.top(), min(y, area.bottom() - size.height()))
+        return QPoint(x, y)
 
     def keyPressEvent(self, e):
         if e.key() == Qt.Key_Escape:
