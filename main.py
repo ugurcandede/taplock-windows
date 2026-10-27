@@ -96,11 +96,16 @@ class TrayApp:
         self._session.posture_dismissed.connect(self._overlays.close_posture)
         self._overlays.posture_dismissed.connect(self._on_posture_dismissed)
 
-        # Previews reuse the break overlays, so they are refused while a session
-        # runs -- a preview must never collide with a real break.
+        # Previews reuse the break and posture windows, so they are refused during
+        # a break, and the real thing replaces a preview that is showing. Each has
+        # its own timer so ending one never closes the other's window.
         self._preview_timer = QTimer(app)
         self._preview_timer.setSingleShot(True)
-        self._preview_timer.timeout.connect(self._end_preview)
+        self._preview_timer.timeout.connect(self._overlays.close)
+        self._posture_preview_timer = QTimer(app)
+        self._posture_preview_timer.setSingleShot(True)
+        self._posture_preview_timer.timeout.connect(self._overlays.close_posture)
+        self._session.posture_due.connect(self._posture_preview_timer.stop)
         self._panel.preview_theme.connect(self._show_preview)
         self._panel.preview_posture.connect(self._show_posture_preview)
         self._panel.open_statistics.connect(self._show_statistics)
@@ -235,31 +240,31 @@ class TrayApp:
 
     def _tick(self):
         self._session.tick()
-        if self._overlays.visible:
+        if self._overlays.visible and not self._preview_timer.isActive():
             self._overlays.set_remaining(self._session.remaining)
 
     def _open_overlay(self):
+        self._preview_timer.stop()  # open() below replaces a theme preview
+        if self._posture_preview_timer.isActive():
+            self._posture_preview_timer.stop()
+            self._overlays.close_posture()
         self._overlays.open(self._session.config)
         self._overlays.set_remaining(self._session.remaining)
 
     def _show_preview(self):
-        if self._session.running:
+        if self._session.on_break:
             return
         analytics.track("theme_previewed", {"theme": self._config.theme})
         self._overlays.open(self._config)
         self._overlays.set_remaining(self._config.break_duration)
         self._preview_timer.start(PREVIEW_MS)
 
-    def _end_preview(self):
-        self._overlays.close()
-        self._overlays.close_posture()
-
     def _show_posture_preview(self):
-        if self._session.running:
+        if self._session.on_break:
             return
         analytics.track("posture_previewed")
         self._overlays.open_posture()
-        self._preview_timer.start(PREVIEW_MS)
+        self._posture_preview_timer.start(PREVIEW_MS)
 
     def _on_skip(self):
         # The same Skip button dismisses a preview and skips a real break.
@@ -283,7 +288,7 @@ class TrayApp:
     def _on_posture_dismissed(self):
         # "Got it" ends a preview and a real reminder alike; the session call is
         # a no-op when there is no session running.
-        self._preview_timer.stop()
+        self._posture_preview_timer.stop()
         self._overlays.close_posture()
         self._session.dismiss_posture()
 
