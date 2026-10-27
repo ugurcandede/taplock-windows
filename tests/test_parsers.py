@@ -5,9 +5,11 @@ from parsers import (
     format_countdown,
     format_duration,
     format_mmss,
+    format_time_range,
     luminance,
     parse_color,
     parse_duration,
+    parse_time_range,
     rgb255,
 )
 
@@ -48,7 +50,10 @@ def test_format_countdown_drops_minutes_below_one(seconds, expected):
     assert format_countdown(seconds) == expected
 
 
-@pytest.mark.parametrize("seconds,expected", [(0, "0:00"), (45, "0:45"), (65, "1:05"), (1500, "25:00")])
+@pytest.mark.parametrize(
+    "seconds,expected",
+    [(0, "0:00"), (45, "0:45"), (65, "1:05"), (1500, "25:00"), (3599, "59:59"), (47527, "13:12:07")],
+)
 def test_format_mmss_always_shows_minutes(seconds, expected):
     assert format_mmss(seconds) == expected
 
@@ -101,3 +106,23 @@ def test_luminance_splits_light_from_dark():
 def test_rgb255():
     assert rgb255((0.0, 0.8, 0.0)) == (0, 204, 0)
     assert rgb255((1.0, 1.0, 1.0)) == (255, 255, 255)
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [("09:00-18:00", (540, 1080)), ("9-18", (540, 1080)), ("12:30-13:15", (750, 795)), ("00:00-24:00", (0, 1440))],
+)
+def test_parse_time_range(text, expected):
+    assert parse_time_range(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text", ["18:00-09:00", "22:00-02:00", "09:00-09:00", "09:60-10:00", "9:5-10", "24:30-25:00", "09:00", "+9-10", ""]
+)
+def test_parse_time_range_rejects(text):
+    assert parse_time_range(text) is None
+
+
+def test_format_time_range_round_trips():
+    assert format_time_range(540, 1440) == "09:00-24:00"
+    assert parse_time_range(format_time_range(750, 795)) == (750, 795)

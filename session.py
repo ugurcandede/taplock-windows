@@ -9,12 +9,13 @@ QTimer to it, which keeps the whole state machine drivable by hand in tests --
 no QApplication, no waiting.
 
 Clocks are injected for the same reason: `monotonic` measures deadlines, `wall`
-stamps stats events.
+stamps stats events and places scheduled breaks (`config.schedule`), and `tz`
+is the zone the schedule's clock times are read in (None: the system's).
 """
 
 import math
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from PySide6.QtCore import QObject, Signal
 
@@ -31,7 +32,10 @@ POSTURE_VISIBLE = 10  # posture reminder auto-dismiss
 # it further behind than this means we were not running at all -- system sleep,
 # most likely. Firing a break hours late is worse than skipping it, so the
 # interval starts over instead. This covers both possible Windows behaviours:
-# whether or not the monotonic clock advances while suspended.
+# whether or not the monotonic clock advances while suspended. While waiting, the
+# wall clock pulling away from the monotonic one by more than this (a sleep the
+# monotonic clock did not count, or the clock being set) re-places the break at
+# its wall-clock time, matching the macOS wake handling.
 MISSED_TICK_LIMIT = 30
 
 
@@ -45,15 +49,20 @@ class RelaxSession(QObject):
     # macOS also chimes ten seconds before a break. Dropped here: two sounds a
     # cycle is already the most a background app should ask for.
 
-    def __init__(self, monotonic=time.monotonic, wall=None, parent=None):
+    def __init__(self, monotonic=time.monotonic, wall=None, tz=None, parent=None):
         super().__init__(parent)
         self._monotonic = monotonic
         self._wall = wall or (lambda: datetime.now(timezone.utc))
+        self._tz = tz
 
         self._state = IDLE
         self._config = None
         self._deadline = 0.0
         self._wait_started = 0.0
+        # Wall-clock time of the pending break, and wall minus monotonic when it
+        # was placed -- how tick() notices the two clocks drifting apart.
+        self._next_break = None
+        self._wall_offset = 0.0
         self._posture_at = None
         self._posture_off_at = None
         self._session_started_at = None
@@ -85,6 +94,21 @@ class RelaxSession(QObject):
         return max(0, math.ceil(self._deadline - self._monotonic()))
 
     @property
+    def next_break(self):
+        """When the pending break starts (aware UTC); None unless waiting."""
+        return self._next_break if self._state == WAITING else None
+
+    @property
+    def paused_until(self):
+        """While a schedule holds the next break back (outside the hours, quiet
+        hours, or no full interval left before them): when the countdown to it
+        starts. None when counting down, on a break, or without a schedule."""
+        if self._state != WAITING or self._config.schedule is None:
+            return None
+        resume = self._next_break - timedelta(seconds=self._config.interval)
+        return resume if resume > self._wall() else None
+
+    @property
     def config(self):
         return self._config
 
@@ -114,10 +138,16 @@ class RelaxSession(QObject):
         self._dismiss_posture()
 
         ended_at = self._wall()
+        schedule = self._config.schedule
+        # Time outside the schedule's hours isn't session time.
+        if schedule is not None:
+            duration = schedule.active_seconds(self._session_started_at, ended_at, tz=self._tz)
+        else:
+            duration = int((ended_at - self._session_started_at).total_seconds())
         stats.append(
             "relax_session_ended",
             ended_at,
-            duration_seconds=int((ended_at - self._session_started_at).total_seconds()),
+            duration_seconds=duration,
             breaks_taken=self._breaks_taken,
         )
 
@@ -175,6 +205,11 @@ class RelaxSession(QObject):
             self.state_changed.emit()
             return
 
+        if self._state == WAITING and abs(self._wall().timestamp() - now - self._wall_offset) > MISSED_TICK_LIMIT:
+            self._resync(now)
+            self.state_changed.emit()
+            return
+
         if self._posture_off_at is not None and now >= self._posture_off_at:
             self._dismiss_posture()
 
@@ -198,28 +233,54 @@ class RelaxSession(QObject):
 
     def _begin_waiting(self):
         now = self._monotonic()
+        wall_now = self._wall()
         config = self._config
         self._state = WAITING
         self._wait_started = now
-        self._deadline = now + config.interval
+        upcoming = None
+        if config.schedule is not None:
+            upcoming = config.schedule.next_break(wall_now, config.interval, config.break_duration, tz=self._tz)
+        # No schedule, or one that allows no break (the panel refuses to start those).
+        self._next_break = upcoming or wall_now + timedelta(seconds=config.interval)
+        self._place_deadline(now, wall_now)
         self._plan_posture(now)
+
+    def _place_deadline(self, now, wall_now):
+        self._deadline = now + (self._next_break - wall_now).total_seconds()
+        self._wall_offset = wall_now.timestamp() - now
+
+    def _resync(self, now):
+        """Keep the break at its wall-clock time, or start a fresh wait if it
+        passed while we were not running (being away counts as the break)."""
+        wall_now = self._wall()
+        if self._next_break > wall_now:
+            self._place_deadline(now, wall_now)
+            self._plan_posture(now)
+        else:
+            self._dismiss_posture()
+            self._begin_waiting()
 
     def _plan_posture(self, now):
         """Next posture reminder of the current wait, measured from its start so
-        a mid-wait config change stays aligned with the countdown."""
+        a mid-wait config change stays aligned with the countdown.
+
+        A schedule can stretch the wait over off-hours, so the wait counts from
+        at most `interval` before the break -- no reminder in the middle of the
+        night. Without a schedule that is the start of the wait."""
         config = self._config
         self._posture_at = None
         if not config.show_posture_reminder:
             return
+        start = max(self._wait_started, self._deadline - config.interval)
         every = config.posture_interval
         if every:
             # Repeats every posture_interval until the break; see tick().
             if every < config.interval:
-                following = self._wait_started + (math.floor((now - self._wait_started) / every) + 1) * every
+                following = start + max(1, math.floor((now - start) / every) + 1) * every
                 if following < self._deadline:
                     self._posture_at = following
         elif config.interval > POSTURE_MIN_INTERVAL:
-            halfway = self._wait_started + config.interval / 2
+            halfway = start + (self._deadline - start) / 2
             if halfway > now:
                 self._posture_at = halfway
 

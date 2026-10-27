@@ -114,6 +114,11 @@ python main.py
 The tray icon fills in and turns green while a session runs, and its tooltip carries the countdown. Right-clicking it
 offers **Stop session**.
 
+Turn on **advanced** to limit breaks to some days and hours (e.g. Mon–Fri, `09:00-18:00`), add **quiet hours** with
+no breaks (e.g. lunch, `12:00-13:00`), or use **fixed break times** that land on the same clock times every day
+(50/10 → 9:50, 10:50, …). The line under it previews the next breaks. A wait that runs into a blocked time starts over
+when that time ends. The schedule is saved with the config and shared with macOS.
+
 During a break, **Skip** or <kbd>Esc</kbd> dismisses the overlay and restarts the interval. The mini theme has no <kbd>
 Esc</kbd> — it never takes focus, so it cannot steal your caret mid-sentence; use its close button instead.
 
@@ -170,6 +175,7 @@ Where the port does not match the original, it is on purpose:
 | Sounds          | Two per cycle, not three — the chime ten seconds before a break is gone             |
 | Settings        | Saved on every change, not only when a session starts                               |
 | Week boundary   | Monday (ISO 8601); macOS follows the system calendar                                |
+| Schedule        | Hours are typed (`09:00-18:00`) and explained in tooltips; macOS uses time pickers  |
 
 ## Requirements
 
