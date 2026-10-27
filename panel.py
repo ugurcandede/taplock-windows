@@ -48,6 +48,7 @@ from parsers import (
     parse_time_range,
     rgb255,
 )
+import schedule as schedule_rules
 from schedule import RelaxSchedule
 import version
 from theme import DARK, LIGHT
@@ -113,7 +114,15 @@ def _day_name(day, format_type):
     return QLocale.system().dayName((day + 5) % 7 + 1, format_type)
 
 
-def _clock(moment):
+PAUSE_REASONS = {
+    schedule_rules.OUTSIDE_HOURS: "Outside your active hours",
+    schedule_rules.QUIET_HOURS: "Quiet hours",
+    schedule_rules.BEFORE_QUIET_HOURS: "No break before quiet hours",
+    schedule_rules.DONE_FOR_TODAY: "No more breaks today",
+}
+
+
+def clock_text(moment):
     """Local short time of an instant, with the day name when it isn't today."""
     local = moment.astimezone()
     text = QLocale.system().toString(QTime(local.hour, local.minute), QLocale.ShortFormat)
@@ -803,7 +812,7 @@ class Panel(QWidget):
                 breaks.append(moment)
                 moment += timedelta(seconds=break_duration)
             if breaks:
-                preview = "breaks: " + " · ".join(_clock(b) for b in breaks) + " …"
+                preview = "breaks: " + " · ".join(clock_text(b) for b in breaks) + " …"
             else:
                 error = "no breaks with these settings"
         # Text is only replaced, never cleared, so a closing line slides out
@@ -1331,11 +1340,17 @@ class Panel(QWidget):
         running = self._session.running
         on_break = self._session.on_break
 
-        if running:
+        paused_until = self._session.paused_until
+        if paused_until is not None:
+            # A schedule is holding breaks back: when they resume, not a long countdown.
+            self._countdown.setText(clock_text(paused_until))
+            self._phase.setText(self._pause_text())
+        elif running:
             self._countdown.setText(format_mmss(self._session.remaining))
             self._phase.setText(self._phase_text())
 
-        key = (running, on_break)
+        paused = paused_until is not None
+        key = (running, on_break, paused)
         if key == self._layout_key:
             return  # countdown text only; leave geometry alone
         first = self._layout_key is None
@@ -1344,7 +1359,9 @@ class Panel(QWidget):
         self._skip.setVisible(on_break)
         self._waiting_actions.setVisible(running and not on_break)
         schedule = self._session.config.schedule if running else None
-        self._restart_button.setVisible(schedule is None or not schedule.align_to_clock)
+        # Fixed break times, or paused: a restart would land on the same break.
+        self._restart_button.setVisible((schedule is None or not schedule.align_to_clock) and not paused)
+        self._countdown.setFont(_mono(36 if paused else 52))
         # After the contents above, so the slide measures the view as it will be.
         self._idle_reveal.set_open(not running, animate=not first)
         self._active_reveal.set_open(running, animate=not first)
@@ -1354,18 +1371,20 @@ class Panel(QWidget):
         self._reflow()
 
     def _phase_text(self):
-        """Under the countdown. With a schedule it names the break time, and says
-        "paused" while the schedule holds breaks back (off days, outside hours,
-        quiet hours)."""
+        """Under the countdown; with a schedule it names the break time. While
+        paused `_pause_text` is shown instead."""
         if self._session.on_break:
             return "break time!"
         upcoming = self._session.next_break
-        interval = timedelta(seconds=self._session.config.interval)
         if self._session.config.schedule is None or upcoming is None:
             return "next break in..."
-        if upcoming - datetime.now(timezone.utc) > interval:
-            return f"paused until {_clock(upcoming - interval)} · next break {_clock(upcoming)}"
-        return f"next break at {_clock(upcoming)}"
+        return f"next break at {clock_text(upcoming)}"
+
+    def _pause_text(self):
+        """Under the resume time: why breaks are held back, and the first one."""
+        reason = self._session.config.schedule.pause_reason(datetime.now(timezone.utc))
+        first = clock_text(self._session.next_break)
+        return f"{PAUSE_REASONS[reason]}\nbreaks resume then · first at {first}"
 
     def _reflow(self):
         """Lay the panel out for its content and put it against the anchor.

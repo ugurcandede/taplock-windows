@@ -494,3 +494,18 @@ def test_session_duration_leaves_out_blocked_time(scheduled, clock, events):
     kind, _, fields = events[-1]
     assert kind == "relax_session_ended"
     assert fields["duration_seconds"] == 1800
+
+
+def test_paused_until_active_hours(scheduled, clock):
+    scheduled.start(from_ten())
+    assert scheduled.paused_until == datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)
+    clock.advance(3600)
+    assert scheduled.paused_until is None
+
+
+def test_not_paused_without_a_schedule_or_on_a_break(scheduled, clock):
+    scheduled.start(config())
+    assert scheduled.paused_until is None
+    run_for(scheduled, clock, 100)
+    assert scheduled.state == BREAK
+    assert scheduled.paused_until is None

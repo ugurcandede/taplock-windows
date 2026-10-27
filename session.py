@@ -99,6 +99,16 @@ class RelaxSession(QObject):
         return self._next_break if self._state == WAITING else None
 
     @property
+    def paused_until(self):
+        """While a schedule holds the next break back (outside the hours, quiet
+        hours, or no full interval left before them): when the countdown to it
+        starts. None when counting down, on a break, or without a schedule."""
+        if self._state != WAITING or self._config.schedule is None:
+            return None
+        resume = self._next_break - timedelta(seconds=self._config.interval)
+        return resume if resume > self._wall() else None
+
+    @property
     def config(self):
         return self._config
 

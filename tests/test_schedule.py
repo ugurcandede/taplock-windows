@@ -180,3 +180,15 @@ def test_json_leaves_out_unset_quiet_hours():
 )
 def test_bad_json_is_none(raw):
     assert RelaxSchedule.from_json(raw) is None
+
+
+def test_pause_reasons():
+    from schedule import BEFORE_QUIET_HOURS, DONE_FOR_TODAY, OUTSIDE_HOURS, QUIET_HOURS
+
+    s = RelaxSchedule(weekdays=WEEKDAYS, active_start=9 * 60, active_end=18 * 60, quiet_start=12 * 60, quiet_end=13 * 60)
+    assert s.pause_reason(at(7, 30), tz=UTC) == OUTSIDE_HOURS
+    assert s.pause_reason(at(18, 0), tz=UTC) == OUTSIDE_HOURS
+    assert s.pause_reason(at(10, 0, day=24), tz=UTC) == OUTSIDE_HOURS  # Saturday
+    assert s.pause_reason(at(12, 30), tz=UTC) == QUIET_HOURS
+    assert s.pause_reason(at(11, 30), tz=UTC) == BEFORE_QUIET_HOURS
+    assert s.pause_reason(at(17, 30), tz=UTC) == DONE_FOR_TODAY
