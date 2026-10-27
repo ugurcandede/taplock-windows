@@ -31,6 +31,8 @@ def post(tmp_path, monkeypatch):
     monkeypatch.setattr(analytics, "_schedule_flush", lambda: analytics.flush())
     monkeypatch.setattr(analytics, "_started", False)
     monkeypatch.setattr(analytics, "_app_user_properties", {})
+    # Events are stamped NOW but pruned by age against the clock, so pin it.
+    monkeypatch.setattr(analytics.time, "time", lambda: NOW.timestamp())
     return fake
 
 
@@ -91,7 +93,7 @@ def test_events_past_72_hours_are_dropped(post, monkeypatch):
     real = time.time()
     monkeypatch.setattr(analytics.time, "time", lambda: real + 73 * 3600)
     analytics.flush()
-    # daily_ping was stamped NOW (2026), long before the fake clock.
+    # Every event was stamped NOW, 73 hours before the fake clock.
     assert "daily_ping" not in post.names()
     assert state()["queue"] == []
 
