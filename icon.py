@@ -120,12 +120,14 @@ def app_icon() -> QIcon:
     return QIcon(str(_ICO))
 
 
-def tray_icon(active: bool) -> QIcon:
-    """Outline leaf when idle, filled green leaf while a session runs."""
+def tray_icon(active: bool, paused: bool = False) -> QIcon:
+    """Outline leaf when idle, filled green leaf while a session runs, and a
+    filled leaf in the plain glyph colour while a schedule holds breaks back."""
+    green = active and not paused
     if taskbar_is_light():
-        colour = _ACTIVE_ON_LIGHT if active else _GLYPH_ON_LIGHT
+        colour = _ACTIVE_ON_LIGHT if green else _GLYPH_ON_LIGHT
     else:
-        colour = _ACTIVE_ON_DARK if active else _GLYPH_ON_DARK
+        colour = _ACTIVE_ON_DARK if green else _GLYPH_ON_DARK
     icon = QIcon()
     for size in _TRAY_SIZES:
         icon.addPixmap(_tray_pixmap(size, active, colour))

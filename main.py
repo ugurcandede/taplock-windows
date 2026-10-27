@@ -22,7 +22,7 @@ import icon
 import startup
 import theme
 from overlay import OverlayController
-from panel import Panel
+from panel import Panel, clock_text
 from parsers import format_mmss
 from session import RelaxSession
 from statswindow import StatisticsWindow
@@ -306,12 +306,17 @@ class TrayApp:
 
     def _refresh_tray(self):
         running = self._session.running
+        paused_until = self._session.paused_until
         # The tooltip changes every second; the icon and menu only on a switch.
-        if running != self._tray_shows_active:
-            self._tray_shows_active = running
-            self._tray.setIcon(icon.tray_icon(running))
+        shown = (running, paused_until is not None)
+        if shown != self._tray_shows_active:
+            self._tray_shows_active = shown
+            self._tray.setIcon(icon.tray_icon(*shown))
             self._stop_action.setVisible(running)
-        if running and self._config.show_timer_in_tooltip:
+        if paused_until is not None:
+            # No countdown while a schedule holds breaks back.
+            self._tray.setToolTip(f"TapLock — paused · breaks resume {clock_text(paused_until)}")
+        elif running and self._config.show_timer_in_tooltip:
             phase = "break" if self._session.on_break else "next break"
             self._tray.setToolTip(f"TapLock — {phase} in {format_mmss(self._session.remaining)}")
         else:

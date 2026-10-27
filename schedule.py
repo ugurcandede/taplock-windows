@@ -18,6 +18,12 @@ from datetime import datetime, timedelta, timezone
 
 DAY = 24 * 60
 
+# Why a schedule holds the next break back; RelaxPauseReason in Swift.
+OUTSIDE_HOURS = "outside_hours"  # an off day, or before or after the hours
+QUIET_HOURS = "quiet_hours"
+BEFORE_QUIET_HOURS = "before_quiet_hours"  # no full interval fits before quiet hours
+DONE_FOR_TODAY = "done_for_today"  # no full interval fits before the hours end
+
 
 @dataclass
 class RelaxSchedule:
@@ -115,6 +121,20 @@ class RelaxSchedule:
                 return candidate
             resume = block_start
         return None
+
+    def pause_reason(self, at, tz=None):
+        """Why breaks are held back at `at`, for a session whose next break is
+        more than an interval away."""
+        local = _local(at, tz)
+        minute = _second_of_day(local) // 60
+        if _weekday(local) not in self.weekdays or not self.active_start <= minute < self.active_end:
+            return OUTSIDE_HOURS
+        if self.quiet_start is not None:
+            if self.quiet_start <= minute < self.quiet_end:
+                return QUIET_HOURS
+            if minute < self.quiet_start:
+                return BEFORE_QUIET_HOURS
+        return DONE_FOR_TODAY
 
     def active_seconds(self, start, end, tz=None):
         """Seconds of [start, end) inside active, non-quiet time."""
